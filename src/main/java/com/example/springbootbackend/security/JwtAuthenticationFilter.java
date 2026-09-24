@@ -18,9 +18,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final com.example.springbootbackend.auth.repository.AppUserRepository users;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService,
+            com.example.springbootbackend.auth.repository.AppUserRepository users) {
         this.jwtService = jwtService;
+        this.users = users;
     }
 
     @Override
@@ -30,8 +33,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String token = authorization.substring(7);
             jwtService.validate(token).ifPresent(claims -> {
-                String email = claims.get("sub").toString();
-                String role = claims.get("role").toString();
+                if (!(claims.get("sub") instanceof String email)) return;
+                var user = users.findByEmailIgnoreCase(email).orElse(null);
+                if (user == null || user.getStatus() != com.example.springbootbackend.auth.entity.UserStatus.APPROVED
+                        || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
+                String role = user.getRole().getName();
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         email,
                         null,

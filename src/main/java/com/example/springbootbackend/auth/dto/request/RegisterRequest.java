@@ -24,4 +24,8 @@ public record RegisterRequest(
         @NotBlank
         String roleName
 ) {
+    public RegisterRequest {
+        if (email != null) email = email.trim().toLowerCase(java.util.Locale.ROOT);
+        if (fullName != null) fullName = fullName.trim();
+    }
 }

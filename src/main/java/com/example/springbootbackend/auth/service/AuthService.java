@@ -14,6 +14,7 @@ import com.example.springbootbackend.auth.entity.RefreshToken;
 import com.example.springbootbackend.auth.entity.Role;
 import com.example.springbootbackend.auth.entity.UserStatus;
 import com.example.springbootbackend.auth.exception.AuthException;
+import com.example.springbootbackend.auth.exception.ApprovalPendingException;
 import com.example.springbootbackend.auth.repository.AppUserRepository;
 import com.example.springbootbackend.auth.repository.RefreshTokenRepository;
 import com.example.springbootbackend.auth.repository.RoleRepository;
@@ -30,8 +31,6 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class AuthService {
-
-    private static final String GOOGLE_LOGIN_PASSWORD_PLACEHOLDER = "{google-login}";
 
     private final AppUserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -64,6 +63,9 @@ public class AuthService {
 
     @Transactional
     public UserResponse register(RegisterRequest request) {
+        if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new AuthException("Password must not exceed 72 UTF-8 bytes");
+        }
         if (userRepository.existsByEmailIgnoreCase(request.email())) {
             throw new AuthException("Email already exists");
         }
@@ -71,16 +73,16 @@ public class AuthService {
         Role role = findRole(request.roleName());
         AppUser user = new AppUser(
                 request.fullName(),
-                request.email().trim().toLowerCase(),
+                request.email().trim().toLowerCase(java.util.Locale.ROOT),
                 request.phone(),
                 passwordEncoder.encode(request.password()),
                 role
         );
 
-        boolean autoApprove = shouldAutoApproveFirstClubManager(role);
+        boolean autoApprove = !requiresApproval(role);
         AppUser savedUser = userRepository.save(user);
         if (autoApprove) {
-            savedUser.approve(savedUser);
+            savedUser.approve(null);
         }
 
         return UserResponse.from(savedUser);
@@ -88,6 +90,10 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
+        if ("{google-login}".equals(request.password())
+                || request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new AuthException("Email or password is incorrect");
+        }
         try {
             authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(request.email(), request.password())
@@ -101,7 +107,7 @@ public class AuthService {
         return createAuthResponse(user);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = ApprovalPendingException.class)
     public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
         GoogleTokenService.GoogleProfile profile = googleTokenService.verify(request.idToken());
         AppUser user = userRepository.findByEmailIgnoreCase(profile.email())
@@ -168,23 +174,23 @@ public class AuthService {
         Role role = findRole(roleName);
         AppUser user = new AppUser(
                 profile.fullName(),
-                profile.email().trim().toLowerCase(),
+                profile.email().trim().toLowerCase(java.util.Locale.ROOT),
                 null,
-                passwordEncoder.encode(GOOGLE_LOGIN_PASSWORD_PLACEHOLDER),
+                passwordEncoder.encode(UUID.randomUUID().toString()),
                 role
         );
 
-        boolean autoApprove = shouldAutoApproveFirstClubManager(role);
+        boolean autoApprove = !requiresApproval(role);
         AppUser savedUser = userRepository.save(user);
         if (autoApprove) {
-            savedUser.approve(savedUser);
+            savedUser.approve(null);
         }
 
         return savedUser;
     }
 
     private Role findRole(String roleName) {
-        return roleRepository.findByName(roleName.trim().toUpperCase())
+        return roleRepository.findByName(roleName.trim().toUpperCase(java.util.Locale.ROOT))
                 .orElseThrow(() -> new AuthException("Role not found"));
     }
 
@@ -193,13 +199,26 @@ public class AuthService {
                 .orElseThrow(() -> new AuthException("User not found"));
     }
 
+    @Transactional(readOnly = true)
+    public UserResponse currentUser(String email) {
+        return UserResponse.from(findUser(email));
+    }
+
     private void ensureApproved(AppUser user) {
+        // Only pending horse owners can be automatically activated.
+        // Rejected and locked accounts must never be automatically reactivated.
+        if (user.getStatus() == UserStatus.PENDING && !requiresApproval(user.getRole())) {
+            user.approve(null);
+        }
+        if (user.getStatus() == UserStatus.PENDING) {
+            throw new ApprovalPendingException();
+        }
         if (user.getStatus() != UserStatus.APPROVED) {
             throw new AuthException("User is not approved");
         }
     }
 
-    private boolean shouldAutoApproveFirstClubManager(Role role) {
-        return "CLUB_MANAGER".equals(role.getName()) && userRepository.count() == 0;
+    private boolean requiresApproval(Role role) {
+        return !"HORSE_OWNER".equals(role.getName());
     }
 }

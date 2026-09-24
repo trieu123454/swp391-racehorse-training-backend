@@ -16,14 +16,19 @@ import org.springframework.util.StringUtils;
 public class GoogleTokenService {
 
     private final GoogleProperties googleProperties;
+    private final JwtDecoder decoder = NimbusJwtDecoder
+            .withJwkSetUri("https://www.googleapis.com/oauth2/v3/certs").build();
 
     public GoogleTokenService(GoogleProperties googleProperties) {
         this.googleProperties = googleProperties;
     }
 
     public GoogleProfile verify(String idToken) {
+        String configuredClientId = googleProperties.clientId();
+        if (!StringUtils.hasText(configuredClientId)) {
+            throw new AuthException("Google login is not configured");
+        }
         try {
-            JwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri("https://www.googleapis.com/oauth2/v3/certs").build();
             Jwt jwt = decoder.decode(idToken);
 
             String issuer = jwt.getIssuer() == null ? "" : jwt.getIssuer().toString();
@@ -31,15 +36,17 @@ public class GoogleTokenService {
                 throw new AuthException("Google token issuer is invalid");
             }
 
-            String configuredClientId = googleProperties.clientId();
-            if (StringUtils.hasText(configuredClientId) && !jwt.getAudience().contains(configuredClientId)) {
+            if (!jwt.getAudience().contains(configuredClientId)) {
                 throw new AuthException("Google token audience is invalid");
             }
 
             Map<String, Object> claims = jwt.getClaims();
-            Boolean emailVerified = (Boolean) claims.getOrDefault("email_verified", Boolean.FALSE);
-            if (!emailVerified) {
+            if (!Boolean.TRUE.equals(claims.get("email_verified"))) {
                 throw new AuthException("Google email is not verified");
+            }
+
+            if (!(claims.get("email") instanceof String email) || !StringUtils.hasText(email)) {
+                throw new AuthException("Google email is missing");
             }
 
             return new GoogleProfile(

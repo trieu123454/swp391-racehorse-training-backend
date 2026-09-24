@@ -86,7 +86,13 @@ HORSE_OWNER
 CLUB_MANAGER
 ```
 
-Tai khoan `CLUB_MANAGER` dau tien se duoc approve tu dong de co quyen duyet cac tai khoan tiep theo.
+Chỉ `HORSE_OWNER` được kích hoạt ngay sau khi đăng ký. Chủ ngựa ở trạng thái `PENDING` từ trước cũng được kích hoạt khi đăng nhập thành công. Tài khoản `REJECTED` hoặc `LOCKED` vẫn bị chặn.
+
+Các vai trò `HEAD_TRAINER`, `VETERINARIAN`, `GROOM`, `CLUB_MANAGER` cần được Club Manager phê duyệt trước khi đăng nhập, kể cả tài khoản đăng ký đầu tiên. Quy tắc này áp dụng cho đăng ký bằng mật khẩu và Google. Tài khoản Google đang chờ duyệt được lưu lại để người quản lý có thể phê duyệt. Tài khoản đã mang trạng thái `APPROVED` được giữ nguyên; thay đổi này không tự thu hồi quyền của tài khoản cũ.
+
+Đăng nhập của chủ ngựa không đồng nghĩa với xác nhận quyền sở hữu ngựa. Backend hiện mới có module xác thực; module hồ sơ ngựa và xác nhận quyền sở hữu chưa được triển khai. Khi bổ sung module này, các API dữ liệu ngựa phải kiểm tra liên kết sở hữu đã được xác nhận.
+
+Một `CLUB_MANAGER` đã được phê duyệt sử dụng API `/api/auth/users/{userId}/approve` để duyệt tài khoản mới. Khi triển khai với cơ sở dữ liệu trống, người quản trị cơ sở dữ liệu cần thiết lập một tài khoản `CLUB_MANAGER` được phê duyệt trước; đăng ký công khai không tự cấp quyền quản lý.
 
 Login body:
 

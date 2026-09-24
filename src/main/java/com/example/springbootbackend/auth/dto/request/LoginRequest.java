@@ -11,4 +11,7 @@ public record LoginRequest(
         @NotBlank
         String password
 ) {
+    public LoginRequest {
+        if (email != null) email = email.trim().toLowerCase(java.util.Locale.ROOT);
+    }
 }
