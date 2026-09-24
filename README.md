@@ -1,0 +1,109 @@
+# SWP391 - Hệ thống quản lý huấn luyện ngựa đua - Backend
+
+Backend REST API cho đề tài **Hệ thống quản lý huấn luyện ngựa đua**, môn **SWP391**, sử dụng Spring Boot và Supabase PostgreSQL.
+
+Tên dự án: `swp391-racehorse-training-backend`.
+
+## Yeu cau
+
+- Java 25 de chay Maven/app, project compile target Java 21 de tuong thich Spring Boot 3.3.x
+- Maven 3.9+
+
+## Chay project
+
+Mở terminal tại thư mục `swp391-racehorse-training-backend` trước khi chạy các lệnh bên dưới.
+
+Thành viên mới sao chép `application-local.properties.example` thành `application-local.properties` và điền cấu hình riêng. File cấu hình local được loại khỏi Git để bảo vệ thông tin đăng nhập.
+
+Neu Maven tren may van dang tro den JDK khac, set `JAVA_HOME` ve JDK 25 truoc:
+
+```powershell
+$env:JAVA_HOME="C:\Program Files\Java\jdk-25.0.4.1"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+mvn -version
+```
+
+Neu da co file `application-local.properties` o thu muc project, ban co the chay thang `mvn spring-boot:run`. Neu chay tren may khac, thiet lap bien moi truong Supabase truoc khi chay:
+
+```powershell
+$env:SUPABASE_DB_URL="jdbc:postgresql://aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require"
+$env:SUPABASE_DB_USER="postgres.fwblgvygdbxlwgenqslz"
+$env:SUPABASE_DB_PASSWORD="YOUR_DATABASE_PASSWORD"
+$env:AUTH_JWT_SECRET="CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+$env:GOOGLE_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"
+```
+
+Project da tat PostgreSQL server-side prepared statements bang `prepareThreshold=0` trong Hikari de tuong thich Supabase Transaction Pooler.
+
+```bash
+mvn spring-boot:run
+```
+
+Server mac dinh chay tai:
+
+```text
+http://localhost:8080
+```
+
+Swagger UI:
+
+```text
+http://localhost:8080/swagger-ui/index.html
+```
+
+## API mau
+
+```http
+GET /api/health
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/google
+POST /api/auth/refresh
+POST /api/auth/logout
+POST /api/auth/users/{userId}/approve
+POST /api/auth/users/{userId}/reject
+```
+
+Register body:
+
+```json
+{
+  "fullName": "Club Manager",
+  "email": "manager@example.com",
+  "phone": "0900000000",
+  "password": "password123",
+  "roleName": "CLUB_MANAGER"
+}
+```
+
+Role hop le:
+
+```text
+HEAD_TRAINER
+VETERINARIAN
+GROOM
+HORSE_OWNER
+CLUB_MANAGER
+```
+
+Tai khoan `CLUB_MANAGER` dau tien se duoc approve tu dong de co quyen duyet cac tai khoan tiep theo.
+
+Login body:
+
+```json
+{
+  "email": "manager@example.com",
+  "password": "password123"
+}
+```
+
+Google login body:
+
+```json
+{
+  "idToken": "GOOGLE_ID_TOKEN",
+  "roleName": "HORSE_OWNER"
+}
+```
+
+`roleName` chi bat buoc trong lan Google login dau tien neu email chua ton tai.
