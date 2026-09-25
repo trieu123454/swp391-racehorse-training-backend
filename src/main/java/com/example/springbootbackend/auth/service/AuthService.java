@@ -205,6 +205,9 @@ public class AuthService {
     }
 
     private void ensureApproved(AppUser user) {
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new AuthException("Tài khoản đã bị khóa");
+        }
         // Only pending horse owners can be automatically activated.
         // Rejected and locked accounts must never be automatically reactivated.
         if (user.getStatus() == UserStatus.PENDING && !requiresApproval(user.getRole())) {

@@ -43,6 +43,7 @@ public class AuthController {
     }
 
     @GetMapping("/me")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("isAuthenticated()")
     public UserResponse currentUser(Principal principal) {
         return authService.currentUser(principal.getName());
@@ -79,12 +80,14 @@ public class AuthController {
     }
 
     @PostMapping("/users/{userId}/approve")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
     public UserResponse approve(@PathVariable Long userId, Principal principal) {
         return authService.approve(userId, principal.getName());
     }
 
     @PostMapping("/users/{userId}/reject")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
     public UserResponse reject(@PathVariable Long userId, Principal principal) {
         return authService.reject(userId, principal.getName());

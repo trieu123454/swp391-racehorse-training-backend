@@ -4,6 +4,14 @@ Backend REST API cho đề tài **Hệ thống quản lý huấn luyện ngựa 
 
 Tên dự án: `swp391-racehorse-training-backend`.
 
+## Cấu trúc mã nguồn
+
+Mã nguồn được chia theo chức năng (`auth`, `horse`); bên trong mỗi chức năng chia theo nhiệm vụ. Xem [phân tích yêu cầu và roadmap](docs/product-requirements-analysis.md) trước khi thêm flow mới, [hướng dẫn tổ chức code](docs/project-structure.md) khi thêm chức năng, [API Flow 1](docs/flow1-api.md) khi nối frontend và [API RBAC Club Manager](docs/club-manager-rbac-api.md) khi làm phân quyền tài khoản.
+
+## Database
+
+Database được quản lý bằng Flyway, Hibernate chỉ kiểm tra schema (`ddl-auto=validate`). Xem [cấu trúc và hướng dẫn migration](docs/database/README.md) để biết schema nghiệp vụ, view phân quyền và cách nâng cấp database đang có tài khoản. Backend Flow 1 đã có API quản lý hồ sơ ngựa và upload ảnh; V4/V5 bổ sung bảng theo dõi ảnh và bảo vệ truy cập.
+
 ## Yeu cau
 
 - Java 25 de chay Maven/app, project compile target Java 21 de tuong thich Spring Boot 3.3.x

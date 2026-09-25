@@ -1,0 +1,424 @@
+//////////////////////////////////////////////////////////
+// 1. NGƯỜI DÙNG & PHÂN QUYỀN
+//////////////////////////////////////////////////////////
+
+Table Users {
+  id CHAR(36) [pk]
+  name VARCHAR(100) [not null]
+  email VARCHAR(100) [unique, not null]
+  password VARCHAR(255) [not null]
+  status VARCHAR(20) [not null, default: 'Active']
+  deleted_at TIMESTAMP [note: 'Soft delete - chỉ Admin được phép set giá trị này']
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Roles {
+  id CHAR(36) [pk]
+  role_name VARCHAR(30) [unique, not null]
+  description VARCHAR(255)
+}
+
+Table User_Roles {
+  user_id CHAR(36) [not null]
+  role_id CHAR(36) [not null]
+
+  Indexes {
+    (user_id, role_id) [pk]
+  }
+}
+
+Table Role_Change_Requests {
+  id CHAR(36) [pk]
+  user_id CHAR(36) [not null]
+  current_role_id CHAR(36)
+  requested_role_id CHAR(36) [not null]
+  reason TEXT
+  status VARCHAR(20) [not null, default: 'Pending', note: 'Pending / Approved / Rejected']
+  reviewed_by CHAR(36) [note: 'Club Manager xử lý yêu cầu']
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  reviewed_at TIMESTAMP
+}
+
+//////////////////////////////////////////////////////////
+// 2. NGỰA & CHUỒNG TRẠI
+//////////////////////////////////////////////////////////
+
+Table Stable_Boxes {
+  id CHAR(36) [pk]
+  box_code VARCHAR(20) [unique, not null]
+  section VARCHAR(50)
+  capacity INT [default: 1]
+  status VARCHAR(20) [default: 'Available']
+}
+
+Table Horses {
+  id CHAR(36) [pk]
+  horse_name VARCHAR(100) [not null]
+  breed VARCHAR(50)
+  birth_year INT
+  pedigree_father VARCHAR(100)
+  pedigree_mother VARCHAR(100)
+  image_url VARCHAR(512) [note: 'URL ảnh lưu trên Firebase Storage']
+  stable_box_id CHAR(36)
+  current_status VARCHAR(20) [not null, default: 'Healthy']
+  current_weight_kg DECIMAL(6,2) [note: 'Phục vụ Horse Owner xem cân nặng real-time']
+  readiness_status VARCHAR(20) [default: 'Unknown', note: 'Ready / NotReady / Unknown']
+  is_training_locked BOOLEAN [not null, default: FALSE]
+  lock_reason VARCHAR(255)
+  lock_level VARCHAR(20) [note: 'Warning / Critical -> ánh xạ màu cảnh báo trên UI']
+  owner_id CHAR(36)
+  deleted_at TIMESTAMP [note: 'Soft delete - chỉ Admin được phép set giá trị này']
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+//////////////////////////////////////////////////////////
+// 3. HUẤN LUYỆN (Head Trainer)
+//////////////////////////////////////////////////////////
+
+Table Training_Plans {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  stage_name VARCHAR(100) [not null, note: 'Tên giai đoạn giáo án']
+  start_date DATE
+  end_date DATE
+  objective TEXT
+  target_distance_meters INT
+  target_intensity VARCHAR(20)
+  created_by CHAR(36)
+  update_deadline_hours INT [default: 24, note: 'Số giờ tối thiểu phải cập nhật trước buổi tập']
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  updated_at TIMESTAMP
+}
+
+Table Training_Plan_Logs {
+  id CHAR(36) [pk]
+  training_plan_id CHAR(36) [not null]
+  changed_by CHAR(36)
+  old_data_json TEXT
+  new_data_json TEXT
+  changed_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Training_Schedules {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  training_plan_id CHAR(36)
+  session_type VARCHAR(20) [default: 'Training', note: 'Training / Race / Rest']
+  track_surface VARCHAR(50)
+  assigned_groom_id CHAR(36)
+  training_date DATE [not null]
+  start_time TIME
+  status VARCHAR(20) [default: 'Scheduled', note: 'Scheduled / Completed / Cancelled']
+  notes TEXT
+  created_by CHAR(36)
+}
+
+Table Training_Metrics_Logs {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  training_schedule_id CHAR(36) [note: 'Gắn với buổi tập cụ thể']
+  recorded_by CHAR(36)
+  body_weight_kg DECIMAL(6,2)
+  max_heart_rate INT
+  avg_speed_kmh DECIMAL(5,2)
+  stamina_score DECIMAL(5,2)
+  has_injury_alert BOOLEAN [not null, default: FALSE]
+  trainer_review TEXT
+  recorded_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Races {
+  id CHAR(36) [pk]
+  race_name VARCHAR(150) [not null]
+  grade VARCHAR(10) [note: 'G1 / G2 / G3 / OP / Pre-OP']
+  distance_category VARCHAR(20) [note: 'Sprint / Mile / Intermediate / Long']
+  distance_meters INT
+  race_date DATE [not null]
+  location VARCHAR(150)
+  description TEXT
+}
+
+Table Horse_Race_Entries {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  race_id CHAR(36) [not null]
+  registered_by CHAR(36)
+  result_position INT
+  prize_amount DECIMAL(15,2)
+  status VARCHAR(20) [default: 'Registered']
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Training_Videos {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  training_schedule_id CHAR(36)
+  video_url VARCHAR(512) [not null]
+  description VARCHAR(255)
+  uploaded_by CHAR(36)
+  uploaded_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+//////////////////////////////////////////////////////////
+// 4. THÚ Y (Veterinarian)
+//////////////////////////////////////////////////////////
+
+Table Health_Exams {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  doctor_id CHAR(36)
+  exam_date TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  temperature_c DECIMAL(4,1)
+  heart_rate INT
+  respiratory_rate INT
+  mucous_membrane_color VARCHAR(50)
+  capillary_refill_sec DECIMAL(4,1)
+  skin_turgor VARCHAR(50)
+  jugular_pulse VARCHAR(50)
+  digital_pulse VARCHAR(50)
+  gut_sounds VARCHAR(50)
+  defecation_frequency VARCHAR(50)
+  urination_frequency VARCHAR(50)
+  body_condition_score DECIMAL(3,1)
+  hoof_temperature VARCHAR(50)
+  gait_assessment TEXT
+  hematology_result TEXT
+  biochemistry_result TEXT
+  fecal_test_result TEXT
+  notes TEXT
+}
+
+Table Health_Exam_Logs {
+  id CHAR(36) [pk]
+  health_exam_id CHAR(36) [not null]
+  edited_by CHAR(36)
+  old_data_json TEXT
+  new_data_json TEXT
+  edited_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Medical_Records {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  doctor_id CHAR(36)
+  health_exam_id CHAR(36)
+  diagnosis TEXT [not null]
+  treatment_plan TEXT
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Prescriptions {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  doctor_id CHAR(36)
+  medical_record_id CHAR(36)
+  drug_name VARCHAR(150) [not null]
+  dosage VARCHAR(100)
+  frequency VARCHAR(100)
+  route VARCHAR(50)
+  start_date DATE
+  end_date DATE
+  status VARCHAR(20) [default: 'Active']
+  notes TEXT
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  updated_at TIMESTAMP
+}
+
+Table Diet_Records {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  doctor_id CHAR(36)
+  feed_type VARCHAR(100)
+  quantity_kg DECIMAL(6,2)
+  feeding_frequency VARCHAR(50)
+  special_instructions TEXT
+  effective_date DATE
+  end_date DATE
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  updated_at TIMESTAMP
+}
+
+Table Injury_Markers {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  medical_record_id CHAR(36)
+  body_part VARCHAR(50)
+  coordinate_x DECIMAL(6,3)
+  coordinate_y DECIMAL(6,3)
+  coordinate_z DECIMAL(6,3)
+  severity VARCHAR(20)
+  description TEXT
+  marked_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Periodic_Care_Schedules {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  care_type VARCHAR(30) [not null, note: 'HoofCheck / Deworming / Vaccination / MedicalCheckup']
+  frequency_days INT
+  last_done_date DATE
+  next_due_date DATE [not null]
+  assigned_doctor_id CHAR(36)
+  notes TEXT
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Notifications {
+  id CHAR(36) [pk]
+  user_id CHAR(36) [not null]
+  related_table VARCHAR(50)
+  related_id CHAR(36)
+  message TEXT [not null]
+  is_read BOOLEAN [default: FALSE]
+  scheduled_at TIMESTAMP
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+//////////////////////////////////////////////////////////
+// 5. CHĂM SÓC HẰNG NGÀY (Groom / Stable Hand)
+//////////////////////////////////////////////////////////
+
+Table Daily_Task_Logs {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  groom_id CHAR(36)
+  assigned_by CHAR(36)
+  task_type VARCHAR(30) [not null, note: 'Feeding / Cleaning / Bathing / IceBath']
+  task_date DATE [not null]
+  status VARCHAR(20) [default: 'Pending', note: 'Pending / Completed']
+  completed_at TIMESTAMP
+}
+
+Table Stable_Incidents {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  groom_id CHAR(36)
+  issue_description TEXT [not null]
+  image_url VARCHAR(512)
+  status VARCHAR(20) [not null, default: 'Pending']
+  reviewed_by CHAR(36)
+  resolved_at TIMESTAMP
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Inventory_Items {
+  id CHAR(36) [pk]
+  item_name VARCHAR(100) [not null]
+  category VARCHAR(30) [note: 'Feed / Medicine / Equipment']
+  unit VARCHAR(20)
+  quantity_in_stock DECIMAL(10,2) [default: 0]
+  reorder_threshold DECIMAL(10,2)
+  updated_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Supply_Requests {
+  id CHAR(36) [pk]
+  requested_by CHAR(36) [not null]
+  item_id CHAR(36) [not null]
+  quantity_requested DECIMAL(10,2) [not null]
+  reason TEXT
+  status VARCHAR(20) [default: 'Pending']
+  reviewed_by CHAR(36)
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+  reviewed_at TIMESTAMP
+}
+
+//////////////////////////////////////////////////////////
+// 6. TÀI CHÍNH & NHẬT KÝ HỆ THỐNG
+//////////////////////////////////////////////////////////
+
+Table Financial_Reports {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  transaction_type VARCHAR(30) [not null]
+  amount DECIMAL(15,2) [not null]
+  billing_period VARCHAR(7) [not null]
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Audit_Logs {
+  id CHAR(36) [pk]
+  user_id CHAR(36)
+  action_performed VARCHAR(255) [not null]
+  ip_address VARCHAR(45)
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+//////////////////////////////////////////////////////////
+// REFERENCES
+//////////////////////////////////////////////////////////
+
+Ref: Users.id < User_Roles.user_id [delete: cascade]
+Ref: Roles.id < User_Roles.role_id [delete: cascade]
+
+Ref: Users.id < Role_Change_Requests.user_id [delete: cascade]
+Ref: Roles.id < Role_Change_Requests.current_role_id [delete: set null]
+Ref: Roles.id < Role_Change_Requests.requested_role_id [delete: cascade]
+Ref: Users.id < Role_Change_Requests.reviewed_by [delete: set null]
+
+Ref: Stable_Boxes.id < Horses.stable_box_id [delete: set null]
+Ref: Users.id < Horses.owner_id [delete: set null]
+
+Ref: Horses.id < Training_Plans.horse_id [delete: cascade]
+Ref: Users.id < Training_Plans.created_by [delete: set null]
+
+Ref: Training_Plans.id < Training_Plan_Logs.training_plan_id [delete: cascade]
+Ref: Users.id < Training_Plan_Logs.changed_by [delete: set null]
+
+Ref: Horses.id < Training_Schedules.horse_id [delete: cascade]
+Ref: Training_Plans.id < Training_Schedules.training_plan_id [delete: set null]
+Ref: Users.id < Training_Schedules.assigned_groom_id [delete: set null]
+Ref: Users.id < Training_Schedules.created_by [delete: set null]
+
+Ref: Horses.id < Training_Metrics_Logs.horse_id [delete: cascade]
+Ref: Training_Schedules.id < Training_Metrics_Logs.training_schedule_id [delete: set null]
+Ref: Users.id < Training_Metrics_Logs.recorded_by [delete: set null]
+
+Ref: Horses.id < Horse_Race_Entries.horse_id [delete: cascade]
+Ref: Races.id < Horse_Race_Entries.race_id [delete: cascade]
+Ref: Users.id < Horse_Race_Entries.registered_by [delete: set null]
+
+Ref: Horses.id < Training_Videos.horse_id [delete: cascade]
+Ref: Training_Schedules.id < Training_Videos.training_schedule_id [delete: set null]
+Ref: Users.id < Training_Videos.uploaded_by [delete: set null]
+
+Ref: Horses.id < Health_Exams.horse_id [delete: cascade]
+Ref: Users.id < Health_Exams.doctor_id [delete: set null]
+
+Ref: Health_Exams.id < Health_Exam_Logs.health_exam_id [delete: cascade]
+Ref: Users.id < Health_Exam_Logs.edited_by [delete: set null]
+
+Ref: Horses.id < Medical_Records.horse_id [delete: cascade]
+Ref: Users.id < Medical_Records.doctor_id [delete: set null]
+Ref: Health_Exams.id < Medical_Records.health_exam_id [delete: set null]
+
+Ref: Horses.id < Prescriptions.horse_id [delete: cascade]
+Ref: Users.id < Prescriptions.doctor_id [delete: set null]
+Ref: Medical_Records.id < Prescriptions.medical_record_id [delete: set null]
+
+Ref: Horses.id < Diet_Records.horse_id [delete: cascade]
+Ref: Users.id < Diet_Records.doctor_id [delete: set null]
+
+Ref: Horses.id < Injury_Markers.horse_id [delete: cascade]
+Ref: Medical_Records.id < Injury_Markers.medical_record_id [delete: set null]
+
+Ref: Horses.id < Periodic_Care_Schedules.horse_id [delete: cascade]
+Ref: Users.id < Periodic_Care_Schedules.assigned_doctor_id [delete: set null]
+
+Ref: Users.id < Notifications.user_id [delete: cascade]
+
+Ref: Horses.id < Daily_Task_Logs.horse_id [delete: cascade]
+Ref: Users.id < Daily_Task_Logs.groom_id [delete: set null]
+Ref: Users.id < Daily_Task_Logs.assigned_by [delete: set null]
+
+Ref: Horses.id < Stable_Incidents.horse_id [delete: cascade]
+Ref: Users.id < Stable_Incidents.groom_id [delete: set null]
+Ref: Users.id < Stable_Incidents.reviewed_by [delete: set null]
+
+Ref: Inventory_Items.id < Supply_Requests.item_id [delete: cascade]
+Ref: Users.id < Supply_Requests.requested_by [delete: set null]
+Ref: Users.id < Supply_Requests.reviewed_by [delete: set null]
+
+Ref: Horses.id < Financial_Reports.horse_id [delete: cascade]
+
+Ref: Users.id < Audit_Logs.user_id [delete: set null]

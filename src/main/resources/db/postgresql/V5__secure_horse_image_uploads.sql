@@ -1,0 +1,1 @@
+ALTER TABLE horse_image_uploads ENABLE ROW LEVEL SECURITY;
