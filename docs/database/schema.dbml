@@ -58,7 +58,6 @@ Table Horses {
   birth_year INT
   pedigree_father VARCHAR(100)
   pedigree_mother VARCHAR(100)
-  image_url VARCHAR(512) [note: 'URL ảnh lưu trên Firebase Storage']
   stable_box_id CHAR(36)
   current_status VARCHAR(20) [not null, default: 'Healthy']
   current_weight_kg DECIMAL(6,2) [note: 'Phục vụ Horse Owner xem cân nặng real-time']
@@ -69,6 +68,30 @@ Table Horses {
   owner_id CHAR(36)
   deleted_at TIMESTAMP [note: 'Soft delete - chỉ Admin được phép set giá trị này']
   created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+//////////////////////////////////////////////////////////
+// 2b. LỊCH TRUNG TÂM (đồng bộ lịch trình cho toàn bộ ngựa)
+//////////////////////////////////////////////////////////
+
+Table Calendar_Events {
+  id CHAR(36) [pk]
+  horse_id CHAR(36) [not null]
+  event_type VARCHAR(30) [not null, note: 'Training / Race / VetCheckup / HoofCheck / Deworming / Vaccination / CareTask']
+  title VARCHAR(150)
+  event_date DATE [not null]
+  start_time TIME
+  end_time TIME
+  status VARCHAR(20) [default: 'Scheduled', note: 'Scheduled / Completed / Cancelled']
+  source_table VARCHAR(50) [not null, note: 'Tên bảng nghiệp vụ gốc chứa chi tiết sự kiện']
+  source_id CHAR(36) [not null, note: 'id bản ghi trong bảng nghiệp vụ gốc']
+  created_by CHAR(36)
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+
+  Indexes {
+    (horse_id, event_date)
+    (source_table, source_id, event_date) [unique]
+  }
 }
 
 //////////////////////////////////////////////////////////
@@ -101,13 +124,12 @@ Table Training_Plan_Logs {
 
 Table Training_Schedules {
   id CHAR(36) [pk]
+  calendar_event_id CHAR(36) [not null, note: 'Ngày/giờ lấy từ Calendar_Events, không lưu trùng ở đây']
   horse_id CHAR(36) [not null]
   training_plan_id CHAR(36)
   session_type VARCHAR(20) [default: 'Training', note: 'Training / Race / Rest']
   track_surface VARCHAR(50)
   assigned_groom_id CHAR(36)
-  training_date DATE [not null]
-  start_time TIME
   status VARCHAR(20) [default: 'Scheduled', note: 'Scheduled / Completed / Cancelled']
   notes TEXT
   created_by CHAR(36)
@@ -140,6 +162,7 @@ Table Races {
 
 Table Horse_Race_Entries {
   id CHAR(36) [pk]
+  calendar_event_id CHAR(36) [not null, note: 'Ngày đua lấy từ Calendar_Events (đồng bộ với Races.race_date)']
   horse_id CHAR(36) [not null]
   race_id CHAR(36) [not null]
   registered_by CHAR(36)
@@ -247,12 +270,15 @@ Table Injury_Markers {
   coordinate_y DECIMAL(6,3)
   coordinate_z DECIMAL(6,3)
   severity VARCHAR(20)
+  recovery_status VARCHAR(20) [not null, default: 'Active', note: 'Active / Recovering / Recovered']
+  marked_by CHAR(36)
   description TEXT
   marked_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
 }
 
 Table Periodic_Care_Schedules {
   id CHAR(36) [pk]
+  calendar_event_id CHAR(36) [note: 'Tạo khi next_due_date được lên lịch cụ thể; NULL nếu chỉ là quy tắc lặp lại chưa chốt ngày']
   horse_id CHAR(36) [not null]
   care_type VARCHAR(30) [not null, note: 'HoofCheck / Deworming / Vaccination / MedicalCheckup']
   frequency_days INT
@@ -280,11 +306,11 @@ Table Notifications {
 
 Table Daily_Task_Logs {
   id CHAR(36) [pk]
+  calendar_event_id CHAR(36) [not null, note: 'Ngày công việc lấy từ Calendar_Events']
   horse_id CHAR(36) [not null]
   groom_id CHAR(36)
   assigned_by CHAR(36)
   task_type VARCHAR(30) [not null, note: 'Feeding / Cleaning / Bathing / IceBath']
-  task_date DATE [not null]
   status VARCHAR(20) [default: 'Pending', note: 'Pending / Completed']
   completed_at TIMESTAMP
 }
@@ -359,12 +385,16 @@ Ref: Users.id < Role_Change_Requests.reviewed_by [delete: set null]
 Ref: Stable_Boxes.id < Horses.stable_box_id [delete: set null]
 Ref: Users.id < Horses.owner_id [delete: set null]
 
+Ref: Horses.id < Calendar_Events.horse_id [delete: cascade]
+Ref: Users.id < Calendar_Events.created_by [delete: set null]
+
 Ref: Horses.id < Training_Plans.horse_id [delete: cascade]
 Ref: Users.id < Training_Plans.created_by [delete: set null]
 
 Ref: Training_Plans.id < Training_Plan_Logs.training_plan_id [delete: cascade]
 Ref: Users.id < Training_Plan_Logs.changed_by [delete: set null]
 
+Ref: Calendar_Events.id - Training_Schedules.calendar_event_id [delete: cascade]
 Ref: Horses.id < Training_Schedules.horse_id [delete: cascade]
 Ref: Training_Plans.id < Training_Schedules.training_plan_id [delete: set null]
 Ref: Users.id < Training_Schedules.assigned_groom_id [delete: set null]
@@ -374,6 +404,7 @@ Ref: Horses.id < Training_Metrics_Logs.horse_id [delete: cascade]
 Ref: Training_Schedules.id < Training_Metrics_Logs.training_schedule_id [delete: set null]
 Ref: Users.id < Training_Metrics_Logs.recorded_by [delete: set null]
 
+Ref: Calendar_Events.id - Horse_Race_Entries.calendar_event_id [delete: cascade]
 Ref: Horses.id < Horse_Race_Entries.horse_id [delete: cascade]
 Ref: Races.id < Horse_Race_Entries.race_id [delete: cascade]
 Ref: Users.id < Horse_Race_Entries.registered_by [delete: set null]
@@ -401,12 +432,15 @@ Ref: Users.id < Diet_Records.doctor_id [delete: set null]
 
 Ref: Horses.id < Injury_Markers.horse_id [delete: cascade]
 Ref: Medical_Records.id < Injury_Markers.medical_record_id [delete: set null]
+Ref: Users.id < Injury_Markers.marked_by [delete: set null]
 
+Ref: Calendar_Events.id - Periodic_Care_Schedules.calendar_event_id [delete: set null]
 Ref: Horses.id < Periodic_Care_Schedules.horse_id [delete: cascade]
 Ref: Users.id < Periodic_Care_Schedules.assigned_doctor_id [delete: set null]
 
 Ref: Users.id < Notifications.user_id [delete: cascade]
 
+Ref: Calendar_Events.id - Daily_Task_Logs.calendar_event_id [delete: cascade]
 Ref: Horses.id < Daily_Task_Logs.horse_id [delete: cascade]
 Ref: Users.id < Daily_Task_Logs.groom_id [delete: set null]
 Ref: Users.id < Daily_Task_Logs.assigned_by [delete: set null]

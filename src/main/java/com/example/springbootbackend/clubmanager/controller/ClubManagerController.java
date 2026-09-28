@@ -1,6 +1,7 @@
 package com.example.springbootbackend.clubmanager.controller;
 
 import com.example.springbootbackend.clubmanager.dto.LockUserRequest;
+import com.example.springbootbackend.clubmanager.dto.CreateStaffUserRequest;
 import com.example.springbootbackend.clubmanager.dto.PendingUserPageResponse;
 import com.example.springbootbackend.clubmanager.dto.RejectUserRequest;
 import com.example.springbootbackend.clubmanager.dto.RoleChangeActionRequest;
@@ -42,6 +43,12 @@ public class ClubManagerController {
             @RequestParam(defaultValue = "APPROVED") String status,
             @RequestParam(required = false) String role) {
         return service.users(principal.getName(), status, role);
+    }
+
+    @PostMapping("/users")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> createStaffAccount(Principal principal, @Valid @RequestBody CreateStaffUserRequest request) {
+        return service.createStaffAccount(principal.getName(), request);
     }
 
     @PatchMapping("/users/{userId}/approve")

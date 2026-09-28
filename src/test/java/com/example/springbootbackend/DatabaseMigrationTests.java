@@ -23,11 +23,11 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")) {
-                rs.next(); assertThat(rs.getInt(1)).isEqualTo(29); // 28 application tables + Flyway
+                rs.next(); assertThat(rs.getInt(1)).isEqualTo(30); // 29 application tables + Flyway
             }
             s.executeUpdate("insert into horses(id, horse_name) values ('00000000-0000-0000-0000-000000000001', 'Thunder')");
             try (var rs = s.executeQuery("select * from horses")) {
@@ -49,7 +49,7 @@ class DatabaseMigrationTests {
             s.executeUpdate("insert into roles(role_id,role_name) values (1,'HORSE_OWNER'),(2,'GROOM')");
             s.executeUpdate("insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(3);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(6);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();
@@ -78,6 +78,50 @@ class DatabaseMigrationTests {
             }
             try (var rs = s.executeQuery("select image_url from horses where id='horse-1'")) {
                 rs.next(); assertThat(rs.getString(1)).isEqualTo("https://example.com/horse.png");
+            }
+        }
+    }
+
+    @Test
+    void calendarMigrationPreservesDatesAndEnforcesLinks() throws Exception {
+        String url = databaseUrl();
+        Flyway.configure().dataSource(url, "sa", "").locations("classpath:db/migration")
+                .target("7").load().migrate();
+        try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
+            s.executeUpdate("insert into horses(id,horse_name) values ('horse','Thunder')");
+            s.executeUpdate("insert into training_schedules(id,horse_id,training_date,start_time) values ('training','horse','2026-10-01','08:30:00')");
+            s.executeUpdate("insert into races(id,race_name,race_date) values ('race','Cup','2026-10-02')");
+            s.executeUpdate("insert into horse_race_entries(id,horse_id,race_id) values ('entry','horse','race')");
+            s.executeUpdate("insert into periodic_care_schedules(id,horse_id,care_type,next_due_date) values ('care','horse','MedicalCheckup','2026-10-03')");
+            s.executeUpdate("insert into daily_task_logs(id,horse_id,task_type,task_date,status) values ('task','horse','Feeding','2026-10-04','Completed')");
+        }
+        migrations(url).migrate();
+        try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
+            try (var rs = s.executeQuery("select event_date,start_time from calendar_events where source_table='training_schedules'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getDate(1).toString()).isEqualTo("2026-10-01");
+                assertThat(rs.getTime(2).toString()).isEqualTo("08:30:00");
+            }
+            try (var rs = s.executeQuery("select event_type,event_date,status from calendar_events order by event_date")) {
+                rs.next();
+                rs.next(); assertThat(rs.getString(1)).isEqualTo("Race");
+                assertThat(rs.getDate(2).toString()).isEqualTo("2026-10-02");
+                rs.next(); assertThat(rs.getString(1)).isEqualTo("MedicalCheckup");
+                assertThat(rs.getDate(2).toString()).isEqualTo("2026-10-03");
+                rs.next(); assertThat(rs.getString(3)).isEqualTo("Completed");
+                assertThat(rs.getDate(2).toString()).isEqualTo("2026-10-04");
+            }
+            assertThatThrownBy(() -> s.executeUpdate("insert into training_schedules(id,horse_id,calendar_event_id) values ('duplicate','horse','training')"))
+                    .isInstanceOf(java.sql.SQLException.class);
+            assertThatThrownBy(() -> s.executeUpdate("insert into training_schedules(id,horse_id,calendar_event_id) values ('missing','horse','missing')"))
+                    .isInstanceOf(java.sql.SQLException.class);
+            s.executeUpdate("delete from calendar_events where id='care'");
+            try (var rs = s.executeQuery("select calendar_event_id from periodic_care_schedules where id='care'")) {
+                assertThat(rs.next()).isTrue(); assertThat(rs.getString(1)).isNull();
+            }
+            s.executeUpdate("delete from calendar_events where id='training'");
+            try (var rs = s.executeQuery("select count(*) from training_schedules")) {
+                rs.next(); assertThat(rs.getInt(1)).isZero();
             }
         }
     }

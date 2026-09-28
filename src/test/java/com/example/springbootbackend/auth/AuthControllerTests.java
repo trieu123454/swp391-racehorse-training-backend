@@ -64,9 +64,9 @@ class AuthControllerTests {
 
     @ParameterizedTest
     @ValueSource(strings = {"HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER"})
-    void staffMustWaitForApprovalEvenWhenFirstAccount(String role) throws Exception {
-        register(role).andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("PENDING"));
+    void staffCannotSelfRegisterEvenWhenFirstAccount(String role) throws Exception {
+        register(role).andExpect(status().isBadRequest());
+        assertThat(users.findByEmailIgnoreCase("user@example.com")).isEmpty();
         login().andExpect(status().isBadRequest()).andExpect(jsonPath("$.accessToken").doesNotExist());
     }
 
@@ -79,7 +79,7 @@ class AuthControllerTests {
         String auth = mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"email\":\"approver@example.com\",\"password\":\"password123\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        register(role).andExpect(jsonPath("$.status").value("PENDING"));
+        seed(role, "user@example.com"); // Legacy pending staff can still be approved.
         Long id = users.findByEmailIgnoreCase("user@example.com").orElseThrow().getId();
         mockMvc.perform(post("/api/auth/users/" + id + "/approve")
                 .header("Authorization", "Bearer " + json.readTree(auth).get("accessToken").asText()))
@@ -120,10 +120,11 @@ class AuthControllerTests {
 
     @ParameterizedTest
     @ValueSource(strings = {"HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER"})
-    void googlePendingStaffIsPersistedAndCannotChangeRoleToBypassApproval(String role) throws Exception {
+    void googleCannotCreateStaffOrChangeAnExistingPendingStaffRole(String role) throws Exception {
         when(google.verify("valid-token")).thenReturn(new GoogleTokenService.GoogleProfile("user@example.com", "User"));
         googleLogin(role).andExpect(status().isBadRequest());
-        AppUser manager = users.findByEmailIgnoreCase("user@example.com").orElseThrow();
+        assertThat(users.findByEmailIgnoreCase("user@example.com")).isEmpty();
+        AppUser manager = seed(role, "user@example.com");
         assertThat(manager.getStatus()).isEqualTo(UserStatus.PENDING);
         googleLogin("HORSE_OWNER").andExpect(status().isBadRequest());
         manager.approve(null);

@@ -3,6 +3,7 @@ package com.example.springbootbackend.auth.controller;
 import java.security.Principal;
 
 import com.example.springbootbackend.auth.dto.request.GoogleLoginRequest;
+import com.example.springbootbackend.auth.dto.request.ChangePasswordRequest;
 import com.example.springbootbackend.auth.dto.request.LoginRequest;
 import com.example.springbootbackend.auth.dto.request.LogoutRequest;
 import com.example.springbootbackend.auth.dto.request.RefreshTokenRequest;
@@ -61,6 +62,13 @@ public class AuthController {
     @PostMapping("/login")
     public AuthResponse login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request);
+    }
+
+    @PostMapping("/change-password")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
+    @PreAuthorize("isAuthenticated()")
+    public AuthResponse changePassword(Principal principal, @Valid @RequestBody ChangePasswordRequest request) {
+        return authService.changePassword(principal.getName(), request);
     }
 
     @PostMapping("/google")

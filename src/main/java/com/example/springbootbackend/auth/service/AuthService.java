@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import com.example.springbootbackend.auth.dto.request.GoogleLoginRequest;
 import com.example.springbootbackend.auth.dto.request.LoginRequest;
+import com.example.springbootbackend.auth.dto.request.ChangePasswordRequest;
 import com.example.springbootbackend.auth.dto.request.RefreshTokenRequest;
 import com.example.springbootbackend.auth.dto.request.RegisterRequest;
 import com.example.springbootbackend.auth.dto.response.AuthResponse;
@@ -63,6 +64,9 @@ public class AuthService {
 
     @Transactional
     public UserResponse register(RegisterRequest request) {
+        if (!StringUtils.hasText(request.roleName()) || !"HORSE_OWNER".equalsIgnoreCase(request.roleName().trim())) {
+            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
+        }
         if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
             throw new AuthException("Password must not exceed 72 UTF-8 bytes");
         }
@@ -104,6 +108,23 @@ public class AuthService {
 
         AppUser user = findUser(request.email());
         ensureApproved(user);
+        return createAuthResponse(user);
+    }
+
+    @Transactional
+    public AuthResponse changePassword(String email, ChangePasswordRequest request) {
+        AppUser user = findUser(email);
+        ensureApproved(user);
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new AuthException("Current password is incorrect");
+        }
+        if (request.newPassword().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new AuthException("Password must not exceed 72 UTF-8 bytes");
+        }
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw new AuthException("New password must be different from the current password");
+        }
+        user.changePassword(passwordEncoder.encode(request.newPassword()));
         return createAuthResponse(user);
     }
 
@@ -167,11 +188,11 @@ public class AuthService {
     }
 
     private AppUser createGoogleUser(GoogleTokenService.GoogleProfile profile, String roleName) {
-        if (!StringUtils.hasText(roleName)) {
-            throw new AuthException("roleName is required for first Google login");
+        if (StringUtils.hasText(roleName) && !"HORSE_OWNER".equalsIgnoreCase(roleName.trim())) {
+            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
         }
 
-        Role role = findRole(roleName);
+        Role role = findRole("HORSE_OWNER");
         AppUser user = new AppUser(
                 profile.fullName(),
                 profile.email().trim().toLowerCase(java.util.Locale.ROOT),

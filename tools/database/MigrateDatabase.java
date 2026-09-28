@@ -33,16 +33,22 @@ class MigrateDatabase {
                             "db/migration/V2__create_business_schema.sql",
                             "db/postgresql/V3__secure_business_tables.sql",
                             "db/migration/V4__horse_image_uploads.sql",
-                            "db/postgresql/V5__secure_horse_image_uploads.sql"}) {
+                            "db/postgresql/V5__secure_horse_image_uploads.sql",
+                            "db/migration/V6__seed_stable_boxes.sql",
+                            "db/migration/V7__require_staff_password_change.sql",
+                            "db/migration/V8__central_calendar.sql",
+                            "db/postgresql/V9__secure_calendar_events.sql",
+                            "db/migration/V10__veterinarian_records_and_recurring_calendar.sql"}) {
+                        System.out.println("Checking " + script);
                         s.execute(Files.readString(Path.of("src/main/resources", script)));
                     }
                     try (var rs = s.executeQuery("SELECT count(*) FROM information_schema.tables WHERE table_schema='" + schema + "' AND table_type='BASE TABLE'")) {
                         rs.next();
-                        if (rs.getInt(1) != 28) throw new IllegalStateException("Unexpected table count");
+                        if (rs.getInt(1) != 29) throw new IllegalStateException("Unexpected table count");
                     }
-                    System.out.println("PASS: PostgreSQL DDL, 28 application tables, compatibility view and RLS.");
+                    System.out.println("PASS: PostgreSQL DDL, 29 application tables, compatibility view and RLS.");
                 } finally {
-                    c.rollback();
+                    if (!c.isClosed()) c.rollback();
                 }
                 System.out.println("Temporary schema rolled back; public data unchanged.");
             }
@@ -57,12 +63,27 @@ class MigrateDatabase {
         }
         Flyway flyway = Flyway.configure().dataSource(url, username, password)
                 .schemas("public").defaultSchema("public")
-                .baselineOnMigrate(true).baselineVersion("1")
+                .baselineOnMigrate(false)
+                .group(true)
                 .locations("filesystem:src/main/resources/db/migration", "filesystem:src/main/resources/db/postgresql")
                 .load();
         var result = flyway.migrate();
         flyway.validate();
         try (Connection c = DriverManager.getConnection(url, username, password)) {
+            try (var s = c.createStatement(); var rs = s.executeQuery(
+                    "SELECT relrowsecurity FROM pg_class WHERE oid='public.calendar_events'::regclass")) {
+                if (!rs.next() || !rs.getBoolean(1)) throw new IllegalStateException("Calendar RLS is not enabled");
+            }
+            try (var s = c.createStatement(); var rs = s.executeQuery(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' "
+                    + "AND table_name='injury_markers' AND column_name IN ('recovery_status','marked_by')")) {
+                if (!rs.next() || rs.getInt(1) != 2) throw new IllegalStateException("Veterinarian columns are missing");
+            }
+            try (var s = c.createStatement(); var rs = s.executeQuery(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.calendar_events'::regclass "
+                    + "AND conname='uq_calendar_source_date'")) {
+                if (!rs.next() || !rs.getString(1).contains("event_date")) throw new IllegalStateException("Recurring calendar constraint is missing");
+            }
             if (!java.util.Objects.equals(before, fingerprint(c)) || usersBefore != countUsers(c)) {
                 throw new IllegalStateException("Authentication data changed unexpectedly; inspect database before proceeding");
             }

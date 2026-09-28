@@ -2,7 +2,9 @@ package com.example.springbootbackend.clubmanager.service;
 
 import com.example.springbootbackend.clubmanager.dto.PendingUserPageResponse;
 import com.example.springbootbackend.clubmanager.dto.PendingUserResponse;
+import com.example.springbootbackend.clubmanager.dto.CreateStaffUserRequest;
 import com.example.springbootbackend.clubmanager.dto.UserApprovalResponse;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,12 +22,44 @@ import static org.springframework.http.HttpStatus.*;
 @Service
 public class ClubManagerService {
     private static final List<String> STAFF_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM");
+    private static final List<String> CREATABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
     private static final List<String> ASSIGNABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "HORSE_OWNER");
 
     private final JdbcTemplate db;
+    private final PasswordEncoder passwordEncoder;
 
-    public ClubManagerService(JdbcTemplate db) {
+    public ClubManagerService(JdbcTemplate db, PasswordEncoder passwordEncoder) {
         this.db = db;
+        this.passwordEncoder = passwordEncoder;
+    }
+
+    @Transactional
+    public Map<String, Object> createStaffAccount(String managerEmail, CreateStaffUserRequest request) {
+        long managerId = requireManager(managerEmail);
+        String role = request.roleName().trim().toUpperCase(Locale.ROOT);
+        if (!CREATABLE_ROLES.contains(role)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Vai trò tài khoản không hợp lệ");
+        }
+        if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new ResponseStatusException(BAD_REQUEST, "Mật khẩu không được vượt quá 72 byte UTF-8");
+        }
+
+        String email = request.email().trim().toLowerCase(Locale.ROOT);
+        if (db.queryForObject("SELECT count(*) FROM users WHERE lower(email)=lower(?)", Long.class, email) > 0) {
+            throw new ResponseStatusException(CONFLICT, "Email đã được sử dụng");
+        }
+
+        Integer roleId = db.queryForObject("SELECT role_id FROM roles WHERE role_name=?", Integer.class, role);
+        LocalDateTime now = LocalDateTime.now();
+        Long userId = db.queryForObject(
+                "INSERT INTO users(full_name,email,phone,password_hash,role_id,status,approved_by,approved_at,must_change_password,created_at,updated_at) "
+                        + "VALUES (?,?,?,?,?,'APPROVED',?,?,TRUE,?,?) RETURNING user_id",
+                Long.class,
+                request.fullName().trim(), email, request.phone(), passwordEncoder.encode(request.password()),
+                roleId, managerId, now, now, now);
+
+        audit(managerId, "CREATE_STAFF_ACCOUNT: " + userId + " " + role);
+        return Map.of("id", userId, "email", email, "role_name", role, "status", "APPROVED", "must_change_password", true);
     }
 
     @Transactional(readOnly = true)

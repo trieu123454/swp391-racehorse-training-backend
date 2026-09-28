@@ -1,5 +1,7 @@
 # Cấu trúc database
 
+Cập nhật V8–V9: xem [lịch trung tâm](calendar-migration.md). Hiện có 29 bảng ứng dụng, một view và bảng lịch sử Flyway. Các số lượng V1–V3 bên dưới mô tả phiên bản ban đầu. Công cụ --apply hiện yêu cầu database đã có lịch sử Flyway, không tự baseline.
+
 Nguồn yêu cầu: `schema.dbml` (bản gốc được bổ sung `Horses.image_url`). SQL thực thi nằm trong `src/main/resources/db/` và là cấu trúc **tương thích với backend đăng nhập hiện tại**, theo lựa chọn của chủ dự án.
 
 ## Khác biệt có chủ đích so với DBML

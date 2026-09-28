@@ -35,8 +35,36 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             jwtService.validate(token).ifPresent(claims -> {
                 if (!(claims.get("sub") instanceof String email)) return;
                 var user = users.findByEmailIgnoreCase(email).orElse(null);
-                if (user == null || user.getStatus() != com.example.springbootbackend.auth.entity.UserStatus.APPROVED
-                        || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
+                if (user == null || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
+                if (user.getStatus() != com.example.springbootbackend.auth.entity.UserStatus.APPROVED) {
+                    if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                        try {
+                            com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                                    "FORBIDDEN", "Tài khoản không được phép truy cập");
+                        } catch (IOException ex) { throw new java.io.UncheckedIOException(ex); }
+                        request.setAttribute("vetAccessDenied", Boolean.TRUE);
+                    }
+                    return;
+                }
+                if (user.isMustChangePassword() && !isAllowedDuringPasswordChange(request.getServletPath())) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.setCharacterEncoding("UTF-8");
+                    response.setHeader("Cache-Control", "no-store");
+                    try {
+                        if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                            com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                                    "FORBIDDEN", "Cần đổi mật khẩu trước khi tiếp tục");
+                        } else {
+                            response.getWriter().write("{\"code\":\"PASSWORD_CHANGE_REQUIRED\",\"message\":\"Change your password before continuing\"}");
+                        }
+                        response.flushBuffer();
+                    } catch (IOException ex) {
+                        throw new java.io.UncheckedIOException(ex);
+                    }
+                    request.setAttribute("passwordChangeRequired", Boolean.TRUE);
+                    return;
+                }
                 String role = user.getRole().getName();
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         email,
@@ -47,6 +75,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             });
         }
 
+        if (Boolean.TRUE.equals(request.getAttribute("passwordChangeRequired"))
+                || Boolean.TRUE.equals(request.getAttribute("vetAccessDenied"))) return;
+
         filterChain.doFilter(request, response);
+    }
+
+    private boolean isAllowedDuringPasswordChange(String path) {
+        return "/api/auth/change-password".equals(path)
+                || "/api/auth/me".equals(path)
+                || "/api/auth/refresh".equals(path)
+                || "/api/auth/logout".equals(path);
     }
 }

@@ -131,7 +131,7 @@ public class HorseService {
     public Map<String,Object> delete(Actor actor,UUID id,boolean confirmed) {
         if(!confirmed) throw new ResponseStatusException(BAD_REQUEST,"Cần xác nhận xóa hồ sơ");
         detail(actor,id);
-        long scheduled = db.queryForObject("SELECT count(*) FROM training_schedules WHERE horse_id=? AND status='Scheduled' AND training_date>=CURRENT_DATE", Long.class, id.toString());
+        long scheduled = db.queryForObject("SELECT count(*) FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? AND ts.status='Scheduled' AND ce.event_date>=CURRENT_DATE", Long.class, id.toString());
         if(db.update("UPDATE horses SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL",id.toString())==0)
             throw new ResponseStatusException(NOT_FOUND,"Không tìm thấy ngựa");
         audit(actor.id(), "DELETE_HORSE: " + id);
