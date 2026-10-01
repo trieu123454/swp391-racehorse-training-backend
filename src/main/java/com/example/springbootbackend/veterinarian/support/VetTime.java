@@ -10,4 +10,7 @@ public class VetTime {
     public Instant now() { return Instant.now().truncatedTo(ChronoUnit.MICROS); }
     public LocalDate today() { return now().atZone(BUSINESS_ZONE).toLocalDate(); }
     public LocalDateTime utcNow() { return LocalDateTime.ofInstant(now(), ZoneOffset.UTC); }
+    public LocalDateTime utcStartOf(LocalDate businessDate) {
+        return LocalDateTime.ofInstant(businessDate.atStartOfDay(BUSINESS_ZONE).toInstant(), ZoneOffset.UTC);
+    }
 }

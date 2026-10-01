@@ -1,6 +1,7 @@
 package com.example.springbootbackend.auth.service;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.UUID;
 
 import com.example.springbootbackend.auth.dto.request.GoogleLoginRequest;
@@ -26,12 +27,15 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AuthService {
+    private static final Set<String> REVIEWABLE_ROLES = Set.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
 
     private final AppUserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -159,18 +163,20 @@ public class AuthService {
 
     @Transactional
     public UserResponse approve(Long userId, String approverEmail) {
-        AppUser approver = findUser(approverEmail);
+        AppUser approver = requireClubManager(approverEmail);
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("User not found"));
+        ensurePendingStaff(user);
         user.approve(approver);
         return UserResponse.from(user);
     }
 
     @Transactional
     public UserResponse reject(Long userId, String approverEmail) {
-        AppUser approver = findUser(approverEmail);
+        AppUser approver = requireClubManager(approverEmail);
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("User not found"));
+        ensurePendingStaff(user);
         user.reject(approver);
         return UserResponse.from(user);
     }
@@ -226,6 +232,9 @@ public class AuthService {
     }
 
     private void ensureApproved(AppUser user) {
+        if (user.getDeletedAt() != null) {
+            throw new AuthException("Account is deleted");
+        }
         if (user.getStatus() == UserStatus.LOCKED) {
             throw new AuthException("Tài khoản đã bị khóa");
         }
@@ -244,5 +253,22 @@ public class AuthService {
 
     private boolean requiresApproval(Role role) {
         return !"HORSE_OWNER".equals(role.getName());
+    }
+
+    private AppUser requireClubManager(String email) {
+        AppUser manager = findUser(email);
+        ensureApproved(manager);
+        if (manager.isMustChangePassword() || !"CLUB_MANAGER".equals(manager.getRole().getName())) {
+            throw new AuthException("Only an active Club Manager can review accounts");
+        }
+        return manager;
+    }
+
+    private void ensurePendingStaff(AppUser user) {
+        if (user.getDeletedAt() != null || user.getStatus() != UserStatus.PENDING
+                || !REVIEWABLE_ROLES.contains(user.getRole().getName())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only pending staff accounts can be reviewed");
+        }
     }
 }

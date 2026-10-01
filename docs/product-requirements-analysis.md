@@ -6,42 +6,32 @@
 
 `Ngựa -> hồ sơ sức khỏe -> giáo án -> lịch tập -> kết quả -> chăm sóc -> chi phí -> báo cáo`
 
-Mục tiêu của bản phân tích này là làm rõ phạm vi, quyền hạn, dữ liệu và thứ tự triển khai trước khi tiếp tục viết FE/BE. Không xây các màn hình chỉ có dữ liệu giả hoặc nút không có API thật.
+Đây là dự án học tập, nên dữ liệu mẫu và dữ liệu mô phỏng được dùng có chủ đích. Giao diện cần gọi API thật cho các thao tác đã triển khai và phân biệt rõ dữ liệu mô phỏng với dữ liệu cảm biến.
 
 ## 2. Hiện trạng dự án
 
 ### Đã có
 
-- Xác thực JWT, refresh token, đăng ký, đăng nhập và phê duyệt tài khoản.
-- Năm role: `HEAD_TRAINER`, `VETERINARIAN`, `GROOM`, `HORSE_OWNER`, `CLUB_MANAGER`.
-- Database migration chứa các nhóm bảng cho ngựa, huấn luyện, thú y, chăm sóc, vật tư, tài chính và audit log.
-- Flow 1 đã có API backend thật:
-  - danh sách/chi tiết ngựa;
-  - tạo, cập nhật;
-  - soft delete;
-  - lọc;
-  - options chuồng/chủ sở hữu;
-  - upload ảnh private và signed URL;
-  - giới hạn dữ liệu Horse Owner ở backend.
-- FE đã có dashboard và các màn hình Flow 1.
+- Xác thực JWT, refresh token, đăng ký, đăng nhập, phê duyệt tài khoản và năm role.
+- Flow 1: hồ sơ ngựa, tìm kiếm/lọc, sửa/xóa mềm, quản lý chuồng và chủ sở hữu, upload ảnh riêng tư, giới hạn dữ liệu Horse Owner ở backend.
+- Flow 2: giáo án, lịch tập, phân công Groom, chỉ số tập luyện và mô phỏng cuộc đua.
+- Flow 3: khám bệnh, hồ sơ điều trị, đơn thuốc, khẩu phần, điểm chấn thương, khóa huấn luyện và workspace Veterinarian.
+- Flow 4: lịch việc Groom, báo cáo sự cố có ảnh upload, vật tư, đề xuất bổ sung và các workspace Groom/Club Manager.
+- Flow 5: danh mục giải đấu chính thức do Club Manager quản lý, đăng ký thi đấu, kết quả và lịch sử thi đấu cho Horse Owner.
+- Báo cáo Club Manager, nhật ký audit và thông báo trong ứng dụng.
 
 ### Chưa có
 
-- Flow 2 chưa có controller/service/API/frontend nghiệp vụ.
-- Flow 3 chưa có controller/service/API/frontend nghiệp vụ.
-- Flow 4 và Flow 5 chưa có triển khai thực tế.
-- Các role Veterinarian và Groom hiện mới có route/auth, chưa có workspace nghiệp vụ.
-- Chưa có realtime telemetry nhịp tim/vận tốc.
-- Chưa có notification delivery thực tế (chỉ có bảng dữ liệu).
-- Chưa có API báo cáo tài chính, audit log và dashboard KPI.
-- Race history của Horse Owner còn phụ thuộc Flow 5.
+- Tích hợp cảm biến thật cho nhịp tim/vận tốc. Các chỉ số hiện có là dữ liệu mô phỏng phục vụ bản demo học tập.
+- Mô hình giải phẫu ngựa 3D thật. Giao diện hiện dùng sơ đồ 2D minh họa để đặt vị trí chấn thương.
+- Gửi thông báo ra email/SMS hoặc push notification; thông báo hiện được lưu và hiển thị trong ứng dụng.
 
-### Vấn đề đang gặp
+### Giới hạn cần ghi rõ
 
-1. Tên yêu cầu nói Firebase nhưng backend hiện đã chọn Supabase Storage. Đây là khác biệt cần chốt; không nên để FE gọi Firebase trong khi BE cấp signed URL Supabase.
-2. Schema gốc dùng ID chuỗi và user nhiều role, database thực tế dùng user ID số và một role chính. Tài liệu API hiện tại phải được xem là hợp đồng thực tế.
-3. Bảng database đã có nhiều module nhưng bảng không đồng nghĩa với chức năng đã hoàn thành. Mỗi flow vẫn cần API, permission, validation, transaction và test.
-4. Dashboard không được hiển thị card chức năng nếu chưa có API tương ứng. Card đó chỉ nên là trạng thái `chưa triển khai`, không phải nút giả.
+1. Dữ liệu mẫu và dữ liệu mô phỏng phù hợp với phạm vi bài tập, nhưng không đại diện cho dữ liệu cảm biến hoặc kết quả vận hành thực tế.
+2. Ảnh riêng tư cần cấu hình Supabase Storage; backend cấp signed URL ngắn hạn thay vì lưu file trực tiếp trong database.
+3. Schema thực tế dùng user ID dạng số và một role chính cho mỗi tài khoản; đây là hợp đồng mà API đang triển khai.
+4. Dashboard hiển thị chức năng đã có API; những tích hợp phần cứng hoặc thông báo bên ngoài còn thiếu phải được ghi rõ là chưa có.
 5. Các trường vận hành như `current_status`, `is_training_locked`, readiness và cảnh báo không được cập nhật tùy ý từ form hồ sơ ngựa. Chúng phải do module sức khỏe/huấn luyện quản lý.
 6. Quyền phải được kiểm tra tại backend. FE chỉ hỗ trợ trải nghiệm, không phải lớp bảo mật.
 
@@ -69,12 +59,11 @@ Mục tiêu của bản phân tích này là làm rõ phạm vi, quyền hạn, 
 `current_status` là trạng thái sức khỏe vận hành, không phải trường nhập tự do trong hồ sơ cơ bản. Bộ giá trị chuẩn:
 
 - `Healthy`
-- `Under Observation`
+- `Monitoring`
 - `Injured`
 - `Quarantine`
-- `Sick`
 
-`readiness_status` là trạng thái sẵn sàng thi đấu, tách khỏi tình trạng sức khỏe. Không tự suy diễn readiness chỉ từ một checkbox FE.
+`readiness_status` là trạng thái sẵn sàng thi đấu, tách khỏi tình trạng sức khỏe. Veterinarian cập nhật đánh giá này cùng trạng thái sức khỏe; `Injured` và `Quarantine` không thể có readiness `Ready`. Không tự suy diễn `Ready` chỉ từ trạng thái khỏe mạnh.
 
 ### BR-04: Khóa huấn luyện
 
@@ -145,7 +134,7 @@ Mục tiêu của bản phân tích này là làm rõ phạm vi, quyền hạn, 
 
 ### Ràng buộc
 
-Hồ sơ cơ bản chỉ sửa tên, giống, năm sinh, pedigree, ảnh, chuồng và owner. Không sửa từ màn hình này: status sức khỏe, readiness, khóa huấn luyện, metrics hoặc lịch sử.
+Hồ sơ cơ bản sửa tên, giống, năm sinh, chiều cao đến vai, pedigree, ảnh, chuồng và owner. Cân nặng hiện tại lấy từ lần ghi metrics mới nhất của Head Trainer; màn hình hồ sơ chỉ hiển thị cân nặng, không sửa metrics, status sức khỏe, readiness, khóa huấn luyện hay lịch sử.
 
 ### Tiêu chí hoàn thành
 
@@ -177,7 +166,7 @@ Hồ sơ cơ bản chỉ sửa tên, giống, năm sinh, pedigree, ảnh, chuồ
 - Chỉ lịch `Completed` mới được chốt metrics và nhận xét cuối buổi.
 - Sửa giáo án/lịch sau thời hạn phải yêu cầu lý do và ghi log.
 - Không xóa metrics đã chốt; sửa phải tạo audit/version.
-- Dữ liệu telemetry realtime nếu chưa có nguồn thật phải hiển thị là `Unavailable`, không tạo số giả.
+- Trong bản demo học tập, chỉ số telemetry có thể mô phỏng; ghi rõ đây là dữ liệu mô phỏng, không phải số đo cảm biến.
 
 ## Flow 3 — Quản lý y tế & xử lý chấn thương
 
@@ -336,16 +325,12 @@ lib/
 
 Dashboard theo role phải hiển thị module thật đã có API. Module chưa triển khai chỉ hiển thị trạng thái rõ ràng, không dẫn người dùng tới màn hình rỗng.
 
-## 8. Thứ tự triển khai đề xuất
+## 8. Thứ tự cải thiện tiếp theo
 
-1. **Ổn định nền tảng:** chốt Supabase Storage thay Firebase, chuẩn hóa DTO/HTTP errors, role policy, audit helper và test fixture.
-2. **Hoàn thiện Flow 1:** thêm test backend/FE, owner confirmation, empty/error states, signed image, soft delete và acceptance test.
-3. **Flow 3 trước Flow 2:** triển khai medical status/lock vì Flow 2 phải phụ thuộc điều kiện an toàn y tế.
-4. **Flow 2:** training plan, schedule, assignment, metrics, review và rule khóa huấn luyện.
-5. **Flow 4:** task hàng ngày, incident, diet và inventory.
-6. **Flow 5:** race catalog, eligibility, entries, results và owner history.
-7. **Reporting/audit/notifications:** dashboard tổng hợp, notification delivery và audit viewer sau khi dữ liệu nguồn ổn định.
-
+1. Hoàn thiện các quy tắc an toàn khi tạo đánh giá phục hồi và mở khóa huấn luyện.
+2. Giữ báo cáo vận hành, kỳ tài chính và bộ lọc audit dùng cùng múi giờ nghiệp vụ.
+3. Cho Club Manager tạo giải đấu chính thức để Head Trainer có danh mục đăng ký trên database mới.
+4. Nếu phạm vi môn học yêu cầu, thay sơ đồ chấn thương 2D bằng tài sản giải phẫu 3D; tích hợp cảm biến thật là phần mở rộng ngoài bản demo.
 ## 9. Định nghĩa hoàn thành cho một flow
 
 Một flow chỉ được gọi là hoàn thành khi có đủ:
@@ -362,4 +347,4 @@ Một flow chỉ được gọi là hoàn thành khi có đủ:
 
 ## 10. Kết luận
 
-Dự án không nên làm lại toàn bộ từ đầu. Nền tảng auth, database và Flow 1 backend là phần có thể giữ lại. Phần cần làm lại là cách chia module và thứ tự triển khai: hoàn thiện contract và test của Flow 1, xây Medical để tạo safety gate, sau đó xây Training. Dashboard chỉ là lớp hiển thị theo capability, không phải nơi che giấu các module chưa có nghiệp vụ.
+Dự án đã có các module chính cho năm flow. Dữ liệu mô phỏng phù hợp với phạm vi học tập; tài liệu và giao diện cần nói rõ khi một số đo là mô phỏng. Các phần mở rộng còn lại là mô hình giải phẫu 3D thật, cảm biến thật và gửi thông báo bên ngoài ứng dụng.

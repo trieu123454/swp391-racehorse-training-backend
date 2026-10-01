@@ -35,7 +35,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             jwtService.validate(token).ifPresent(claims -> {
                 if (!(claims.get("sub") instanceof String email)) return;
                 var user = users.findByEmailIgnoreCase(email).orElse(null);
-                if (user == null || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
+                if (user == null || user.getDeletedAt() != null
+                        || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
                 if (user.getStatus() != com.example.springbootbackend.auth.entity.UserStatus.APPROVED) {
                     if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
                         try {

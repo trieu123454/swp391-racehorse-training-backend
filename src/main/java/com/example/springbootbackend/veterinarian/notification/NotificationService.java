@@ -28,7 +28,7 @@ public class NotificationService {
     }
 
     public Map<String, Object> list(String email, boolean unreadOnly, ApiPage page) {
-        long user = access.requireUser(email, false);
+        long user = access.requireActiveUser(email);
         var now = time.utcNow();
         String where = " WHERE user_id=? AND COALESCE(scheduled_at,created_at)<=?";
         Long unread = db.queryForObject("SELECT count(*) FROM notifications" + where + " AND is_read=FALSE", Long.class, user, now);
@@ -42,7 +42,7 @@ public class NotificationService {
 
     @Transactional
     public Map<String, Object> read(String email, String ip, UUID id) {
-        long user = access.requireUser(email, false);
+        long user = access.requireActiveUser(email);
         var rows = db.queryForList("SELECT id FROM notifications WHERE id=? AND user_id=? "
                 + "AND COALESCE(scheduled_at,created_at)<=? FOR UPDATE", id.toString(), user, time.utcNow());
         if (rows.isEmpty()) throw new VetException(404, "NOT_FOUND", "Không tìm thấy thông báo");
@@ -53,7 +53,7 @@ public class NotificationService {
 
     @Transactional
     public Map<String, Object> readAll(String email, String ip) {
-        long user = access.requireUser(email, false);
+        long user = access.requireActiveUser(email);
         int updated = db.update("UPDATE notifications SET is_read=TRUE WHERE user_id=? AND is_read=FALSE "
                 + "AND COALESCE(scheduled_at,created_at)<=?", user, time.utcNow());
         audit.record(user, ip, "READ_ALL_NOTIFICATIONS:" + user);

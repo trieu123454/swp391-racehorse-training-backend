@@ -42,16 +42,25 @@ public class SecurityConfig {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
-                .exceptionHandling(errors -> errors.authenticationEntryPoint((request, response, ex) -> {
-                    if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
-                        com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 401,
-                                "UNAUTHENTICATED", "Vui lòng đăng nhập");
-                        return;
-                    }
-                    response.setStatus(401);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"message\":\"Authentication required\"}");
-                }))
+                .exceptionHandling(errors -> errors
+                        .authenticationEntryPoint((request, response, ex) -> {
+                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 401,
+                                        "UNAUTHENTICATED", "Vui lòng đăng nhập");
+                                return;
+                            }
+                            response.setStatus(401);
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Authentication required\"}");
+                        })
+                        .accessDeniedHandler((request, response, ex) -> {
+                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                                        "FORBIDDEN", "Tài khoản không được phép truy cập");
+                                return;
+                            }
+                            response.sendError(403);
+                        }))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/me", "/api/auth/users/**", "/api/auth/change-password").authenticated()

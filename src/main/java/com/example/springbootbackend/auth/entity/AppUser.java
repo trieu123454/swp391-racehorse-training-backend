@@ -61,6 +61,9 @@ public class AppUser {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     protected AppUser() {
     }
 
@@ -122,6 +125,10 @@ public class AppUser {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public LocalDateTime getDeletedAt() {
+        return deletedAt;
     }
 
     public void approve(AppUser approver) {

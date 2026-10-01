@@ -9,7 +9,7 @@ Storage is Supabase, replacing Firebase by agreement. All endpoints require the 
 | POST | `/api/horses` | Manager; create (201) |
 | PUT | `/api/horses/{id}` | Manager; update basic profile |
 | GET | `/api/horses/options/stables` | Manager; available boxes with free capacity |
-| GET | `/api/horses/options/owners` | Manager; approved owners |
+| GET | `/api/horses/options/owners?q=tri&page=0&size=20` | Manager; server-side owner search by name, email, phone, or owner ID; maximum 50 results per page |
 | GET | `/api/horses/{id}/deletion-warnings` | Manager; training and medical counts |
 | DELETE | `/api/horses/{id}?confirmed=true` | Manager; soft delete (204) |
 | POST | `/api/horses/images` | Manager; multipart field `file`, returns `imagePath` (201) |
@@ -22,6 +22,7 @@ Optional list filters (manager/trainer only): `search` (literal case-insensitive
   "horseName": "Thunder",
   "breed": "Thoroughbred",
   "birthYear": 2020,
+  "heightCm": 162.5,
   "pedigreeFather": "Sire",
   "pedigreeMother": "Dam",
   "stableBoxId": "00000000-0000-0000-0000-000000000001",
@@ -31,7 +32,9 @@ Optional list filters (manager/trainer only): `search` (literal case-insensitive
 }
 ```
 
-Stable selection is required. Owner/image and pedigree are optional. Update sends the full editable profile; null/omitted imagePath retains the existing image. Changing/removing the owner requires confirmOwnerChange=true (otherwise 409). Operational fields are never written from this request. Capacity admissions lock the stable row transactionally. No stable creation endpoint is included in Flow 1; populate the stable catalog through its management flow or controlled database setup.
+Stable selection is required. Height (`heightCm`, centimeters) is optional and maintained with the basic horse profile. The horse detail response also includes current weight from the latest recorded training metric, falling back to `horses.current_weight_kg`; Head Trainer metric entry updates that current value. Owner/image and pedigree are optional. Update sends the full editable profile; null/omitted imagePath retains the existing image. Changing/removing the owner requires confirmOwnerChange=true (otherwise 409). Operational fields are never written from this request. Capacity admissions lock the stable row transactionally. No stable creation endpoint is included in Flow 1; populate the stable catalog through its management flow or controlled database setup.
+
+Owner lookup returns `{items, hasMore, page, size}` and does not return the full owner directory. Enter at least three characters to search name, email, or phone; a numeric owner ID (also accepted as `#123`) can be searched directly. Each result includes its unique email and owner ID so same-name owners can be distinguished. PostgreSQL trigram indexes support substring search at larger directory sizes.
 
 Upload accepts JPG/JPEG, PNG, WebP <=5 MiB and checks extension, MIME and binary signature. Backend uses an API secret in the `apikey` header (never exposed to clients). Bucket remains private. The uploaded path is recorded against the uploader to reject arbitrary paths on create/update; DB image_url contains this permanent path, not an expiring URL. Upload errors do not modify the horse. Previous/orphaned images are retained per use case. Signed links already issued remain usable until their five-minute expiry, including after ownership changes/deletion.
 

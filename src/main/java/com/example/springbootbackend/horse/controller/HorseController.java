@@ -43,7 +43,13 @@ public class HorseController {
     @GetMapping("/options/stables")
     public List<Map<String,Object>> stables(Principal p) { horses.actor(p.getName(),false); return horses.stables(); }
     @GetMapping("/options/owners")
-    public List<Map<String,Object>> owners(Principal p) { horses.actor(p.getName(),true); return horses.owners(); }
+    public Map<String,Object> owners(Principal p,
+        @RequestParam(defaultValue="") String q,
+        @RequestParam(defaultValue="0") int page,
+        @RequestParam(defaultValue="20") int size) {
+        horses.actor(p.getName(),true);
+        return horses.owners(q,page,size);
+    }
     @GetMapping("/{id}/deletion-warnings")
     public Map<String,Object> warnings(Principal p,@PathVariable UUID id) { return horses.warnings(horses.actor(p.getName(),true),id); }
     @DeleteMapping("/{id}")

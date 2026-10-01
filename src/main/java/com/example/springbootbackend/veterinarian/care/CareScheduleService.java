@@ -19,11 +19,14 @@ public class CareScheduleService {
     private final VetAudit audit;
     private final VetTime time;
     private final NotificationService notifications;
+    private final CalendarConflictService conflicts;
     private final LocalTime reminderTime;
     private final String doctorLock;
     public CareScheduleService(VetData data,VetAccess access,VetAudit audit,VetTime time,NotificationService notifications,
+            CalendarConflictService conflicts,
             @Value("${app.vet.reminder-time:08:00}") String reminderTime) {
         this.data=data; this.access=access; this.audit=audit; this.time=time; this.notifications=notifications;
+        this.conflicts=conflicts;
         this.reminderTime=LocalTime.parse(reminderTime);
         boolean postgres=Boolean.TRUE.equals(data.db.execute((org.springframework.jdbc.core.ConnectionCallback<Boolean>)
                 connection -> connection.getMetaData().getDatabaseProductName().equals("PostgreSQL")));
@@ -33,7 +36,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> create(String email,String ip,JsonNode body) {
-        long actor=access.requireUser(email,true);
+        long actor=access.requireRole(email, "VETERINARIAN");
         var fields=VetInput.parse(body,"horse_id:uuid","care_type:30","frequency_days:int","last_done_date:date","next_due_date:date",
                 "assigned_doctor_id:long","notes:0","book_event:bool","start_time:time","end_time:time");
         VetInput.required(fields,"horse_id"); VetInput.choice(fields,"care_type","HoofCheck","Deworming","Vaccination","MedicalCheckup");
@@ -61,7 +64,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> book(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireUser(email,true); var schedule=lockedSchedule(id);
+        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id);
         if(schedule.get("calendar_event_id")!=null) throw new VetException(409,"EVENT_ALREADY_BOOKED","Quy tắc đã có sự kiện");
         var fields=VetInput.parse(body,"event_date:date","start_time:time","end_time:time");
         fields.putIfAbsent("event_date",schedule.get("next_due_date")); VetInput.required(fields,"event_date");
@@ -75,7 +78,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> move(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireUser(email,true); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
+        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
         var fields=VetInput.parse(body,"event_date:date","start_time:time","end_time:time");
         var merged=new LinkedHashMap<>(current); merged.putAll(fields);
         VetInput.required(merged,"event_date"); LocalDate date=(LocalDate)merged.get("event_date");
@@ -89,7 +92,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> cancel(String email,String ip,String id) {
-        long actor=access.requireUser(email,true); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
+        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
         String eventId=current.get("id").toString();
         data.update("calendar_events",eventId,Map.of("status","Cancelled")); removeFutureReminders(eventId);
         data.db.update("UPDATE periodic_care_schedules SET calendar_event_id=NULL WHERE id=?",id);
@@ -98,7 +101,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> complete(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireUser(email,true); var schedule=lockedSchedule(id);
+        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id);
         var fields=VetInput.parse(body,"done_date:date","next_start_time:time","next_end_time:time");
         fields.putIfAbsent("done_date",time.today()); VetInput.required(fields,"done_date");
         LocalDate done=(LocalDate)fields.get("done_date");
@@ -118,12 +121,14 @@ public class CareScheduleService {
             LocalDate nextDate=nextDate(done,((Number)schedule.get("frequency_days")).intValue()); patch.put("next_due_date",nextDate);
             LocalTime start=(LocalTime)(fields.containsKey("next_start_time")?fields.get("next_start_time"):current==null?null:current.get("start_time"));
             LocalTime end=(LocalTime)(fields.containsKey("next_end_time")?fields.get("next_end_time"):current==null?null:current.get("end_time"));
-            var conflicts=(start!=null && end!=null && end.isAfter(start))?checkCareConflicts(horse(schedule),doctor(schedule),nextDate,start,end,null):List.<Map<String,Object>>of();
+            var conflicting=(start!=null && end!=null && end.isAfter(start))
+                    ?conflicts.checkCalendarConflicts(horse(schedule),nextDate,start,end,null,doctor(schedule),"VETERINARIAN")
+                    :List.<Map<String,Object>>of();
             var occupied=sourceEvent(id,nextDate);
             boolean usable=occupied==null || "Cancelled".equals(occupied.get("status"));
-            if(start==null || end==null || !end.isAfter(start) || nextDate.isBefore(time.today()) || !conflicts.isEmpty() || !usable) {
+            if(start==null || end==null || !end.isAfter(start) || nextDate.isBefore(time.today()) || !conflicting.isEmpty() || !usable) {
                 patch.put("calendar_event_id",null);
-                warnings.add(Map.of("code","NEXT_EVENT_NOT_BOOKED","reason","Thiếu giờ, ngày đã qua hoặc có lịch xung đột","conflicts",conflicts));
+                warnings.add(Map.of("code","NEXT_EVENT_NOT_BOOKED","reason","Thiếu giờ, ngày đã qua hoặc có lịch xung đột","conflicts",conflicting));
             } else {
                 next=writeEvent(schedule,nextDate,start,end,actor,null); patch.put("calendar_event_id",next.get("id")); reminder(schedule,next);
             }
@@ -144,7 +149,7 @@ public class CareScheduleService {
     }
 
     public Map<String,Object> list(String email,String horse,String care,Integer days,ApiPage page) {
-        access.requireUser(email,true); validateCare(care);
+        access.requireRole(email, "VETERINARIAN"); validateCare(care);
         if(horse!=null) access.requireHorse(horse,false);
         if(days!=null && days<0) throw VetException.invalid("due_within_days","Phải >= 0");
         String from=" FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id";
@@ -161,7 +166,7 @@ public class CareScheduleService {
     }
 
     public Map<String,Object> calendar(String email,LocalDate from,LocalDate to,String scope,String horse,String care,boolean context,ApiPage page) {
-        long actor=access.requireUser(email,true); validateCare(care);
+        long actor=access.requireRole(email, "VETERINARIAN"); validateCare(care);
         if(!List.of("mine","all").contains(scope)) throw VetException.invalid("scope","Chỉ nhận mine hoặc all");
         if(from==null || to==null || from.isAfter(to)) throw VetException.invalid("from","Cần from và to hợp lệ");
         if(horse!=null) access.requireHorse(horse,false);
@@ -200,19 +205,9 @@ public class CareScheduleService {
         return result;
     }
 
-    public List<Map<String,Object>> checkCareConflicts(String horse,long doctor,LocalDate date,LocalTime start,LocalTime end,String exclude) {
-        String sql="SELECT DISTINCT ce.id AS event_id,ce.event_type,ce.event_date,ce.start_time,ce.end_time,h.horse_name "
-                +"FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
-                +"LEFT JOIN periodic_care_schedules p ON ce.source_id=p.id AND ce.source_table='"+SOURCE+"' "
-                +"WHERE h.deleted_at IS NULL AND ce.event_date=? AND ce.status<>'Cancelled' AND ce.event_type NOT IN ('CareTask','Rest') "
-                +"AND (ce.horse_id=? OR p.assigned_doctor_id=?) AND (ce.start_time IS NULL OR ce.end_time IS NULL OR (ce.start_time<? AND ce.end_time>?))";
-        var args=new ArrayList<Object>(List.of(date,horse,doctor,end,start));
-        if(exclude!=null) { sql+=" AND ce.id<>?"; args.add(exclude); }
-        return data.db.query(sql+" ORDER BY ce.event_date,ce.start_time,ce.id",VetRows.MAPPER,args.toArray());
-    }
     private void requireNoConflicts(String horse,long doctor,LocalDate date,LocalTime start,LocalTime end,String exclude) {
-        var conflicts=checkCareConflicts(horse,doctor,date,start,end,exclude);
-        if(!conflicts.isEmpty()) throw new VetException(409,"SCHEDULE_CONFLICT","Trùng lịch ngựa hoặc bác sĩ",Map.of("conflicts",conflicts));
+        var conflicting=conflicts.checkCalendarConflicts(horse,date,start,end,exclude,doctor,"VETERINARIAN");
+        if(!conflicting.isEmpty()) throw new VetException(409,"SCHEDULE_CONFLICT","Trùng lịch ngựa hoặc bác sĩ",Map.of("conflicts",conflicting));
     }
     private void lockDoctor(long doctor,boolean active) {
         var rows=data.db.queryForList("SELECT user_id,status,role_id,deleted_at FROM users WHERE user_id=?"+doctorLock,doctor);

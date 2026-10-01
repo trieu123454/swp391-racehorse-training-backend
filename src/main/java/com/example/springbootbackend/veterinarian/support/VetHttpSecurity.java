@@ -9,6 +9,10 @@ public final class VetHttpSecurity {
     private VetHttpSecurity() {}
     public static boolean applies(String path) {
         return path.matches("/api/horses/[^/]+/(health-exams|medical-records|prescriptions|diet-records|injury-markers|health-status|training-lock|training-unlock)/?")
+                || path.matches("/api/horses/[^/]+/(training-metrics|training-plans|training-schedules|race-entries)/?")
+                || path.startsWith("/api/head-trainer/") || path.startsWith("/api/training-plans/")
+                || path.startsWith("/api/training-schedules/")
+                || path.equals("/api/groom") || path.startsWith("/api/groom/")
                 || path.startsWith("/api/vet/") || path.startsWith("/api/periodic-care-schedules")
                 || path.startsWith("/api/medical-records/") || path.startsWith("/api/prescriptions/") || path.startsWith("/api/diet-records/")
                 || path.equals("/api/health-exams") || path.startsWith("/api/health-exams/")

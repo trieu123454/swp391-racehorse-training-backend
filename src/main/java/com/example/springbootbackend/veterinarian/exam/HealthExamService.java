@@ -1,6 +1,7 @@
 package com.example.springbootbackend.veterinarian.exam;
 
 import com.example.springbootbackend.veterinarian.support.*;
+import com.example.springbootbackend.veterinarian.notification.NotificationService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.*;
@@ -22,16 +23,17 @@ public class HealthExamService {
     private final VetTime time;
     private final ExamAlerts alerts;
     private final ObjectMapper json;
+    private final NotificationService notifications;
 
     public HealthExamService(JdbcTemplate db, VetAccess access, VetAudit audit, VetTime time,
-                             ExamAlerts alerts, ObjectMapper json) {
+                             ExamAlerts alerts, ObjectMapper json, NotificationService notifications) {
         this.db = db; this.access = access; this.audit = audit; this.time = time;
-        this.alerts = alerts; this.json = json;
+        this.alerts = alerts; this.json = json; this.notifications = notifications;
     }
 
     @Transactional
     public Map<String, Object> create(String email, String ip, UUID horseId, JsonNode body) {
-        long doctor = access.requireUser(email, true);
+        long doctor = access.requireRole(email, "VETERINARIAN");
         access.requireHorse(horseId.toString(), true);
         Map<String, Object> data = ExamInput.parse(body);
         data.putIfAbsent("exam_date", time.now());
@@ -42,12 +44,18 @@ public class HealthExamService {
         String placeholders = String.join(",", Collections.nCopies(data.size(), "?"));
         db.update("INSERT INTO health_exams(" + columns + ") VALUES (" + placeholders + ")",
                 data.values().stream().map(VetRows::sqlValue).toArray());
+        var horse = db.queryForList("SELECT owner_id,horse_name FROM horses WHERE id=?", horseId.toString());
+        Object ownerId = horse.isEmpty() ? null : horse.getFirst().get("owner_id");
+        if (ownerId instanceof Number owner)
+            notifications.schedule(owner.longValue(), "Health_Exams", id,
+                    "A new veterinary health examination is available for " + horse.getFirst().get("horse_name") + ".",
+                    time.now());
         audit.record(doctor, ip, "CREATE_HEALTH_EXAM:" + id);
         return detailRecord(id);
     }
 
     public Map<String, Object> list(String email, UUID horseId, LocalDate from, LocalDate to, ApiPage page) {
-        access.requireUser(email, true);
+        access.requireRole(email, "VETERINARIAN");
         access.requireHorse(horseId.toString(), false);
         if (from != null && to != null && from.isAfter(to)) throw VetException.invalid("to", "Phải >= from");
         List<Object> args = new ArrayList<>(); args.add(horseId.toString());
@@ -72,12 +80,12 @@ public class HealthExamService {
     }
 
     public Map<String, Object> detail(String email, UUID id) {
-        access.requireUser(email, true);
+        access.requireRole(email, "VETERINARIAN");
         return detailRecord(id.toString());
     }
 
     public Map<String, Object> logs(String email, UUID id, ApiPage page) {
-        access.requireUser(email, true);
+        access.requireRole(email, "VETERINARIAN");
         existing(id.toString(), false);
         var rows = db.query("SELECT l.*,u.full_name AS editor_name FROM health_exam_logs l "
                 + "LEFT JOIN users u ON u.user_id=l.edited_by WHERE l.health_exam_id=? "
@@ -101,7 +109,7 @@ public class HealthExamService {
 
     @Transactional
     public Map<String, Object> update(String email, String ip, UUID id, JsonNode body) {
-        long editor = access.requireUser(email, true);
+        long editor = access.requireRole(email, "VETERINARIAN");
         var old = existing(id.toString(), true);
         var patch = ExamInput.parse(body);
         Map<String, Object> merged = new LinkedHashMap<>(old); merged.putAll(patch);

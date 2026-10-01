@@ -170,7 +170,7 @@ class VeterinarianTests {
         var input=new LinkedHashMap<String,Object>(Map.of("body_part","Left leg","severity","Severe","coordinate_x",0.4));
         call(body(post("/api/horses/"+horse+"/injury-markers"),input)).andExpect(status().isBadRequest());
         input.put("coordinate_y",0.7);
-        call(body(post("/api/horses/"+horse+"/injury-markers"),input)).andExpect(status().isCreated()).andExpect(jsonPath("$.suggest_lock").value(true)).andExpect(jsonPath("$.marked_by").value(uid(VET)));
+        call(body(post("/api/horses/"+horse+"/injury-markers"),input)).andExpect(status().isCreated()).andExpect(jsonPath("$.training_locked").value(true)).andExpect(jsonPath("$.suggest_lock").value(false)).andExpect(jsonPath("$.marked_by").value(uid(VET)));
         when(time.utcNow()).thenReturn(LocalDateTime.ofInstant(NOW.plusSeconds(1),ZoneOffset.UTC));
         input.put("recovery_status","Recovered"); input.put("severity","Mild");
         call(body(post("/api/horses/"+horse+"/injury-markers"),input)).andExpect(status().isCreated());
@@ -193,7 +193,8 @@ class VeterinarianTests {
     }
     @Test void healthStatusDoesNotMutateWeightAndOverviewExcludesDeletedHorses() throws Exception {
         call(body(patch("/api/horses/"+horse+"/health-status"),Map.of("current_status","Injured","current_weight_kg",500,"note","x".repeat(400))))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.suggest_lock").value(true));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.suggest_lock").value(false))
+                .andExpect(jsonPath("$.is_training_locked").value(true));
         assertThat(db.queryForObject("SELECT current_weight_kg FROM horses WHERE id=?",Double.class,horse)).isNull();
         assertThat(db.queryForObject("SELECT max(length(action_performed)) FROM audit_logs",Integer.class)).isLessThanOrEqualTo(255);
         db.update("UPDATE horses SET deleted_at=CURRENT_TIMESTAMP WHERE id=?",otherHorse);
@@ -315,13 +316,14 @@ class VeterinarianTests {
         call(get("/api/periodic-care-schedules?horse_id="+otherHorse)).andExpect(jsonPath("$.data[0].is_overdue").value(false));
     }
 
-    @Test void lockReturnsUpcomingSessionsWithoutCancellingThem() throws Exception {
+    @Test void lockBlocksUpcomingSessionsWithoutCancellingThem() throws Exception {
         String eventId=UUID.randomUUID().toString(), trainingId=UUID.randomUUID().toString();
         db.update("INSERT INTO calendar_events(id,horse_id,event_type,event_date,source_table,source_id) VALUES (?,?,'Training',?,'training_schedules',?)",eventId,horse,TODAY.plusDays(1),trainingId);
         db.update("INSERT INTO training_schedules(id,horse_id,calendar_event_id) VALUES (?,?,?)",trainingId,horse,eventId);
         call(body(put("/api/horses/"+horse+"/training-lock"),Map.of("lock_level","Critical","lock_reason","Injury")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.upcoming_sessions[0].training_schedule_id").value(trainingId));
-        assertThat(db.queryForObject("SELECT status FROM calendar_events WHERE id=?",String.class,eventId)).isEqualTo("Scheduled");
+        assertThat(db.queryForObject("SELECT status FROM calendar_events WHERE id=?",String.class,eventId)).isEqualTo("Blocked");
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,trainingId)).isEqualTo("Blocked");
     }
 
     @Test void notificationAndScheduleRollbackWhenAuditFails() throws Exception {

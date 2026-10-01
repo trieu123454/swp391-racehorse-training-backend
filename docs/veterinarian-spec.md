@@ -100,7 +100,7 @@ Thao tác ghi từ 2 bảng trở lên (kể cả `Audit_Logs` và `Notification
 
 | Cột | Giá trị |
 |---|---|
-| `Horses.current_status` | `Healthy` (Đủ điều kiện), `Monitoring` (Cần theo dõi), `Injured` (Chấn thương), `Quarantine` (Cách ly) |
+| `Horses.current_status` | `Healthy` (Khỏe mạnh), `Monitoring` (Cần theo dõi), `Injured` (Chấn thương), `Quarantine` (Cách ly) |
 | `Horses.lock_level` | `Warning` (cam), `Critical` (đỏ) |
 | `Prescriptions.status` | `Active`, `Completed`, `Stopped` |
 | `Injury_Markers.severity` | `Mild`, `Moderate`, `Severe` |
@@ -134,7 +134,7 @@ Bảng `Notifications` không có cột "đã gửi", nên dùng cách đơn gi�
 | BR-V-05 | Mọi thao tác ghi đều ghi `Audit_Logs` (mục 2.3). |
 | BR-V-06 | Bác sĩ vẫn thao tác đầy đủ trên ngựa **đang bị khóa huấn luyện**. Khóa chỉ chặn Flow 2. |
 | BR-V-07 | Các field ngoài phạm vi của từng API (vd `id`, `horse_id`, `created_at`) bị bỏ qua khi có trong request, không báo lỗi. |
-| BR-V-08 | Bác sĩ **không** sửa `readiness_status`, `current_weight_kg` (do Flow 2 quản lý) và không sửa hồ sơ gốc của ngựa (do Club Manager quản lý, Flow 1). |
+| BR-V-08 | Bác sĩ cập nhật `readiness_status` bằng đánh giá rõ ràng; `Injured`/`Quarantine` không thể là `Ready`. Bác sĩ không sửa `current_weight_kg` (do Flow 2 quản lý) hoặc hồ sơ gốc của ngựa (do Club Manager quản lý, Flow 1). |
 
 ---
 
@@ -437,13 +437,13 @@ Response `201`: bản ghi + `warnings` (mảng, có thể rỗng).
 **US-V09.** Là bác sĩ thú y, tôi muốn đánh dấu vị trí chấn thương trên mô hình cơ thể ngựa và cập nhật diễn biến theo thời gian để theo dõi quá trình phục hồi.
 - Given tôi bấm vào một vị trí trên mô hình, When tôi nhập mức độ nghiêm trọng và lưu, Then điểm đánh dấu được tạo với tọa độ và vị trí cơ thể.
 - Given vị trí đó đã có điểm cũ, When tôi đánh giá lại (vd chuyển sang `Recovering`), Then hệ thống tạo **bản ghi mới**, bản cũ vẫn còn trong lịch sử.
-- Given mức độ là `Severe` mà ngựa chưa bị khóa huấn luyện, When tôi lưu, Then hệ thống gợi ý tôi kích hoạt khóa huấn luyện.
+- Given điểm chấn thương mới được lưu ở trạng thái `Active` hoặc `Recovering`, When tôi lưu, Then hệ thống tự chuyển trạng thái an toàn và khóa lịch huấn luyện.
 
 **Luồng hoạt động**
-1. Bác sĩ chọn ngựa, mở mô hình (3D hoặc sơ đồ 2D, do FE quyết định).
+1. Bác sĩ chọn ngựa và mở sơ đồ minh họa 2D hiện có.
 2. Bấm vị trí: FE lấy `coordinate_x/y/z` và `body_part`.
 3. Nhập `severity`, `recovery_status`, mô tả, chọn hồ sơ chẩn đoán liên quan (nếu có). Lưu.
-4. BE validate, `INSERT Injury_Markers`, `INSERT Audit_Logs`, trả kèm `suggest_lock`.
+4. BE validate, thêm bản ghi vào `Injury_Markers`, ghi audit; với trạng thái `Active`/`Recovering`, tự khóa huấn luyện, đặt `Injured`/`NotReady`, chặn lịch tập sắp tới và báo Head Trainer/Groom.
 
 **API**
 
@@ -465,7 +465,7 @@ Response `201`: bản ghi + `warnings` (mảng, có thể rỗng).
 }
 ```
 
-Response `201`: bản ghi + `"suggest_lock": true / false`.
+Response `201`: bản ghi mới, `training_locked` và `suggest_lock=false` (giữ để tương thích). Trạng thái `Active`/`Recovering` tự khóa huấn luyện.
 
 **Business rules**
 
@@ -476,8 +476,10 @@ Response `201`: bản ghi + `"suggest_lock": true / false`.
 | BR-D3 | Nếu có `medical_record_id` thì hồ sơ đó phải thuộc **cùng ngựa**. |
 | BR-D4 | **Chỉ thêm, không sửa, không xóa** (BR-V-04). Mỗi lần đánh giá lại là một bản ghi mới cùng `body_part`, theo dõi diễn biến bằng `marked_at`. |
 | BR-D5 | Điểm có `recovery_status = Recovered` là bản mới nhất của vị trí đó thì UI coi như đã hồi phục (không tô màu chấn thương hiện tại), nhưng vẫn nằm trong lịch sử. |
-| BR-D6 | `suggest_lock = true` khi `severity = Severe` **và** ngựa chưa bị khóa. Chỉ là gợi ý cho UI, BE **không tự khóa**. |
-| BR-D7 | `marked_by` lấy từ token. |
+| BR-D6 | Mọi đánh giá mới ở trạng thái `Active` hoặc `Recovering` đều đặt `Injured`/`NotReady`, khóa huấn luyện mức `Critical` và chặn lịch tập sắp tới; trạng thái `Quarantine` được giữ nguyên. |
+| BR-D7 | `marked_by` lấy từ token. |
+| BR-D8 | Bản ghi mới nhất theo `lower(trim(body_part))` quyết định vị trí còn chấn thương hay đã hồi phục; các bản ghi cũ chỉ là lịch sử. |
+| BR-D9 | Không cho đặt `Healthy`, readiness `Ready` hoặc mở khóa khi còn vị trí mới nhất ở `Active`/`Recovering`. Sau khi mọi vị trí chuyển `Recovered`, bác sĩ cập nhật sức khỏe/readiness rồi mới mở khóa. |
 
 **Tác động DB:** `INSERT Injury_Markers`, `INSERT Audit_Logs`.
 
@@ -487,7 +489,7 @@ Response `201`: bản ghi + `"suggest_lock": true / false`.
 
 ### E1. Xem sơ đồ sức khỏe toàn đàn (#36, bổ sung)
 
-**US-V10.** Là bác sĩ thú y, tôi muốn xem nhanh toàn bộ đàn ngựa theo 4 trạng thái (Đủ điều kiện, Cần theo dõi, Chấn thương, Cách ly) trên sơ đồ chuồng để biết ngựa nào cần ưu tiên.
+**US-V10.** Là bác sĩ thú y, tôi muốn xem nhanh toàn bộ đàn ngựa theo 4 trạng thái (Khỏe mạnh, Cần theo dõi, Chấn thương, Cách ly) trên sơ đồ chuồng để biết ngựa nào cần ưu tiên.
 - Given đàn có nhiều ngựa, When tôi mở màn tổng quan, Then thấy số lượng theo từng trạng thái và danh sách ngựa kèm vị trí chuồng.
 - Given ngựa đang bị khóa huấn luyện, When tôi xem, Then có dấu hiệu khóa (đỏ / cam theo `lock_level`).
 
@@ -518,25 +520,24 @@ Response `201`: bản ghi + `"suggest_lock": true / false`.
 
 ---
 
-### E2. Cập nhật trạng thái sức khỏe (#37, bổ sung)
+### E2. Cập nhật trạng thái sức khỏe (#37)
 
-**US-V11.** Là bác sĩ thú y, tôi muốn cập nhật trạng thái sức khỏe của ngựa sau khi khám để sơ đồ tổng quan và chủ ngựa luôn thấy thông tin đúng.
-- Given ngựa `Healthy`, When tôi đổi sang `Injured`, Then trạng thái cập nhật và hệ thống gợi ý khóa huấn luyện nếu chưa khóa.
+US-V11. Bác sĩ cập nhật sức khỏe và readiness riêng sau khi khám; Healthy chỉ có nghĩa là Khỏe mạnh, không tự suy ra Ready.
+- Given ngựa chưa bị khóa, When bác sĩ đặt current_status thành Injured hoặc Quarantine, Then ngựa tự chuyển NotReady, bị khóa Critical và các lịch tập sắp tới bị chặn.
+- Given còn điểm chấn thương mới nhất ở Active hoặc Recovering, When bác sĩ đặt Healthy hoặc Ready, Then API trả 409 ACTIVE_INJURY_MARKER.
 
-**API:** `PATCH /api/horses/:id/health-status` body `{ "current_status": "Injured", "note": "..." }`
+API: PATCH /api/horses/:id/health-status. Body nhận current_status, readiness_status và note.
 
-Response `200`: `{ "id", "current_status", "suggest_lock": true / false }`
+Response 200 gồm id, current_status, readiness_status, is_training_locked, lock_level, lock_reason, suggest_lock=false và upcoming_sessions.
 
-**Business rules**
-- BR-E4: Chỉ nhận đúng field `current_status` (thuộc 4 giá trị ở mục 2.7). Không nhận thêm field nào khác của `Horses` (BR-V-08).
-- BR-E5: `suggest_lock = true` khi trạng thái mới là `Injured` hoặc `Quarantine` và ngựa chưa khóa.
-- BR-E6: Không có ràng buộc cứng giữa `current_status` và `is_training_locked` (hai thao tác độc lập).
-- BR-E7: `Audit_Logs` ghi giá trị cũ và mới: `UPDATE_HEALTH_STATUS:{horse_id}:Healthy->Injured`. `note` (nếu có) chỉ ghép vào phần còn chỗ trong 255 ký tự.
+Business rules:
+- BR-E4: current_status thuộc Healthy, Monitoring, Injured, Quarantine. readiness_status (nếu gửi) thuộc Ready, NotReady, Unknown.
+- BR-E5: Injured/Quarantine không thể Ready. Khi ngựa chưa bị khóa, hai trạng thái này tự khóa huấn luyện Critical, đặt NotReady và chặn lịch tập sắp tới.
+- BR-E6: Nếu vị trí chấn thương mới nhất còn Active/Recovering thì không nhận Healthy hoặc Ready; bác sĩ phải đánh giá vị trí đó là Recovered trước.
+- BR-E7: Healthy không tự đổi readiness thành Ready. Hai trạng thái được lưu riêng.
+- BR-E8: Audit ghi trạng thái cũ/mới và ghi chú nếu có.
 
-**Tác động DB:** `UPDATE Horses.current_status`, `INSERT Audit_Logs`.
-
----
-
+Tác động DB: UPDATE Horses; chặn lịch ở Training_Schedules và Calendar_Events khi tự khóa; INSERT Audit_Logs.
 ### E3. Kích hoạt "Khóa huấn luyện" (#32)
 
 **US-V12.** Là bác sĩ thú y, tôi muốn khóa huấn luyện khẩn cấp cho ngựa chấn thương để không ai xếp bài tập nặng cho nó.
@@ -601,9 +602,9 @@ Response `200`: `{ "id", "is_training_locked": false, "suggest_status_update": t
 
 | Mã | Quy tắc |
 |---|---|
-| BR-E14 | Chỉ role `VETERINARIAN` được mở khóa (mặc định D3). |
-| BR-E15 | Ngựa phải đang khóa, nếu không `409 NOT_LOCKED`. |
-| BR-E16 | `reason` bắt buộc. Set `is_training_locked = FALSE`, `lock_reason = NULL`, `lock_level = NULL`. |
+| BR-E14 | Chỉ role VETERINARIAN được mở khóa. |
+| BR-E15 | Ngựa phải đang bị khóa; nếu không trả 409 NOT_LOCKED. Không cho mở khóa khi trạng thái còn Injured/Quarantine hoặc vị trí mới nhất còn Active/Recovering. |
+| BR-E16 | Khi mọi vị trí mới nhất đã Recovered và bác sĩ đã cập nhật trạng thái/readiness phù hợp, gỡ is_training_locked, lock_reason và lock_level. |
 | BR-E17 | Thông báo cho tất cả Head Trainer `Active`: `Ngựa {horse_name} đã được mở khóa huấn luyện`. |
 | BR-E18 | `Audit_Logs`: `UNLOCK_TRAINING:{horse_id}:{reason}` (cắt đủ 255 ký tự). Vì `Horses` không có cột lưu lý do mở khóa nên đây là nơi duy nhất lưu. |
 | BR-E19 | Không tự đổi `current_status`. `suggest_status_update = true` khi trạng thái hiện tại là `Injured` hoặc `Quarantine` để UI nhắc bác sĩ cập nhật (E2). |
@@ -915,7 +916,7 @@ Xem toàn bộ thao tác của bác sĩ qua `Audit_Logs` (mọi API ghi ở trê
 | Ăn uống | Tạo trùng `feed_type` (khác hoa thường) chồng khoảng thời gian | `409 DIET_OVERLAP` |
 | Ăn uống | Cùng ngựa, 2 loại thức ăn khác nhau | Cả hai lưu được |
 | Chấn thương | Gửi `coordinate_x` mà không có `coordinate_y` | `400` |
-| Chấn thương | `severity = Severe`, ngựa chưa khóa | `suggest_lock = true` |
+| Chấn thương | Đánh giá mới có `recovery_status = Active` hoặc `Recovering` | Ngựa chuyển `Injured`/`NotReady`, khóa huấn luyện mức `Critical`, lịch tập sắp tới bị chặn |
 | Chấn thương | Đánh giá lại cùng `body_part` | Có 2 bản ghi, `latest_only=true` trả bản mới |
 | Khóa | Khóa hợp lệ | Cờ khóa bật, mỗi Head Trainer `Active` nhận 1 thông báo |
 | Khóa | Khóa khi đã khóa, đổi lý do | `was_locked=true`, cập nhật, thông báo mới |

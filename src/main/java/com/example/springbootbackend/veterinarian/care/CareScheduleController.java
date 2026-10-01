@@ -8,9 +8,11 @@ import java.security.Principal;
 import java.time.LocalDate;
 import java.util.*;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController @RequestMapping("/api")
+@PreAuthorize("hasRole('VETERINARIAN')")
 @io.swagger.v3.oas.annotations.tags.Tag(name="Veterinarian - Periodic care")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bearerAuth")
 public class CareScheduleController {

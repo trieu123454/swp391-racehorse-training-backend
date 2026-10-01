@@ -61,6 +61,7 @@ Table Horses {
   stable_box_id CHAR(36)
   current_status VARCHAR(20) [not null, default: 'Healthy']
   current_weight_kg DECIMAL(6,2) [note: 'Phục vụ Horse Owner xem cân nặng real-time']
+  height_cm DECIMAL(5,1) [note: 'Chiều cao tính bằng centimet']
   readiness_status VARCHAR(20) [default: 'Unknown', note: 'Ready / NotReady / Unknown']
   is_training_locked BOOLEAN [not null, default: FALSE]
   lock_reason VARCHAR(255)
@@ -146,7 +147,54 @@ Table Training_Metrics_Logs {
   stamina_score DECIMAL(5,2)
   has_injury_alert BOOLEAN [not null, default: FALSE]
   trainer_review TEXT
+  bp_systolic INT
+  bp_diastolic INT
+  is_simulated BOOLEAN [not null, default: FALSE]
   recorded_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Race_Simulations {
+  id CHAR(36) [pk]
+  distance_meters INT [not null]
+  duration_seconds INT [not null]
+  training_schedule_id CHAR(36)
+  status VARCHAR(20) [not null, default: 'Running']
+  created_by BIGINT
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table Race_Simulation_Horses {
+  simulation_id CHAR(36) [not null]
+  horse_id CHAR(36) [not null]
+  lane INT [not null]
+  seed INT [not null]
+  base_max_speed_kmh DECIMAL(5,2) [not null]
+  base_resting_heart_rate INT [not null]
+  base_bp_systolic INT [not null]
+  base_bp_diastolic INT [not null]
+
+  Indexes {
+    (simulation_id, horse_id) [pk]
+    (simulation_id, lane) [unique]
+  }
+}
+
+Table Race_Simulation_Metrics {
+  id CHAR(36) [pk]
+  simulation_id CHAR(36) [not null]
+  horse_id CHAR(36) [not null]
+  lane INT
+  finish_time_seconds DECIMAL(6,2) [not null]
+  avg_speed_kmh DECIMAL(5,2)
+  max_heart_rate INT
+  max_bp_systolic INT
+  max_bp_diastolic INT
+  rank INT
+  created_at TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+
+  Indexes {
+    (simulation_id, horse_id) [unique]
+  }
 }
 
 Table Races {
@@ -403,6 +451,13 @@ Ref: Users.id < Training_Schedules.created_by [delete: set null]
 Ref: Horses.id < Training_Metrics_Logs.horse_id [delete: cascade]
 Ref: Training_Schedules.id < Training_Metrics_Logs.training_schedule_id [delete: set null]
 Ref: Users.id < Training_Metrics_Logs.recorded_by [delete: set null]
+
+Ref: Training_Schedules.id < Race_Simulations.training_schedule_id [delete: set null]
+Ref: Users.id < Race_Simulations.created_by [delete: set null]
+Ref: Race_Simulations.id < Race_Simulation_Horses.simulation_id [delete: cascade]
+Ref: Horses.id < Race_Simulation_Horses.horse_id [delete: cascade]
+Ref: Race_Simulations.id < Race_Simulation_Metrics.simulation_id [delete: cascade]
+Ref: Horses.id < Race_Simulation_Metrics.horse_id [delete: cascade]
 
 Ref: Calendar_Events.id - Horse_Race_Entries.calendar_event_id [delete: cascade]
 Ref: Horses.id < Horse_Race_Entries.horse_id [delete: cascade]

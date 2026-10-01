@@ -36,6 +36,7 @@ class ClubManagerControllerTests {
         createUser("Pending Trainer", "trainer@test.com", "HEAD_TRAINER", "PENDING");
         createUser("Pending Owner", "owner@test.com", "HORSE_OWNER", "PENDING");
         createUser("Approved Groom", "groom@test.com", "GROOM", "APPROVED");
+        createUser("Locked Groom", "locked@test.com", "GROOM", "LOCKED");
     }
 
     @Test
@@ -70,6 +71,40 @@ class ClubManagerControllerTests {
                         .with(user("manager@test.com").roles("CLUB_MANAGER"))
                         .contentType(APPLICATION_JSON)
                         .content(json.writeValueAsString(Map.of("reason", "test"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void lockedAccountsRemainListedAndCanBeUnlocked() throws Exception {
+        long lockedGroomId = userId("locked@test.com");
+        mvc.perform(get("/api/club-manager/users")
+                        .with(user("manager@test.com").roles("CLUB_MANAGER"))
+                        .param("status", "LOCKED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(lockedGroomId))
+                .andExpect(jsonPath("$[0].status").value("LOCKED"));
+
+        mvc.perform(patch("/api/club-manager/users/{id}/unlock", lockedGroomId)
+                        .with(user("manager@test.com").roles("CLUB_MANAGER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        assertThat(db.queryForObject("SELECT status FROM users WHERE user_id=?", String.class, lockedGroomId)).isEqualTo("APPROVED");
+        assertThat(db.queryForObject("SELECT count(*) FROM notifications WHERE user_id=?", Long.class, lockedGroomId)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT count(*) FROM audit_logs WHERE action_performed=?", Long.class, "UNLOCK_USER: " + lockedGroomId)).isEqualTo(1);
+
+        mvc.perform(patch("/api/club-manager/users/{id}/unlock", lockedGroomId)
+                        .with(user("manager@test.com").roles("CLUB_MANAGER")))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void managerCannotUnlockAnotherClubManager() throws Exception {
+        createUser("Locked Manager", "locked-manager@test.com", "CLUB_MANAGER", "LOCKED");
+        long managerId = userId("locked-manager@test.com");
+
+        mvc.perform(patch("/api/club-manager/users/{id}/unlock", managerId)
+                        .with(user("manager@test.com").roles("CLUB_MANAGER")))
                 .andExpect(status().isForbidden());
     }
 

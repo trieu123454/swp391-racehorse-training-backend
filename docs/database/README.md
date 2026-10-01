@@ -1,6 +1,6 @@
 # Cấu trúc database
 
-Cập nhật V8–V9: xem [lịch trung tâm](calendar-migration.md). Hiện có 29 bảng ứng dụng, một view và bảng lịch sử Flyway. Các số lượng V1–V3 bên dưới mô tả phiên bản ban đầu. Công cụ --apply hiện yêu cầu database đã có lịch sử Flyway, không tự baseline.
+Cập nhật V8–V9: xem [lịch trung tâm](calendar-migration.md). Toàn bộ migration hiện tạo 34 bảng ứng dụng và 2 view; Flyway có thêm bảng lịch sử riêng. Các số lượng V1–V3 bên dưới mô tả phiên bản ban đầu. Công cụ --apply hiện yêu cầu database đã có lịch sử Flyway, không tự baseline.
 
 Nguồn yêu cầu: `schema.dbml` (bản gốc được bổ sung `Horses.image_url`). SQL thực thi nằm trong `src/main/resources/db/` và là cấu trúc **tương thích với backend đăng nhập hiện tại**, theo lựa chọn của chủ dự án.
 
@@ -24,19 +24,27 @@ Các ID nghiệp vụ mới giữ `CHAR(36)`; ứng dụng phải cấp chuỗi 
 - V1: tạo `users`, `roles`, `refresh_tokens` khi database trống.
 - V2: thêm `users.deleted_at`, view `user_roles`, 24 bảng nghiệp vụ, 51 khóa ngoại và index. `horses` có đủ 17 trường trong bản cập nhật, gồm `image_url VARCHAR(512)`.
 - V3 (chỉ PostgreSQL): bật RLS cho 24 bảng nghiệp vụ và không cho các vai trò Supabase client đọc view phân quyền. Spring Boot truy cập bằng tài khoản DB phía server có quyền phù hợp. Không đặt DB password trong frontend.
+- V4: theo dõi ảnh hồ sơ ngựa được upload và tài khoản đã upload.
+- V8–V9: thêm lịch trung tâm và chuẩn hóa liên kết với các lịch tập/chăm sóc.
+- V12: bổ sung huyết áp và cờ dữ liệu giả lập cho chỉ số huấn luyện, cùng các bảng phiên giả lập, danh sách ngựa tham gia, và kết quả.
+- V13 (chỉ PostgreSQL): bật RLS cho các bảng giả lập mới.
+- V14: tạo view dùng chung để tổng hợp chỉ số tập luyện.
+- V18: bổ sung chiều cao ngựa (`height_cm`) trong hồ sơ.
 
-Tổng cộng: **27 bảng ứng dụng + 1 view**, cộng `flyway_schema_history` để quản lý phiên bản. Trong 27 bảng ứng dụng có bảng `refresh_tokens` phục vụ đăng nhập, không có trong DBML gốc.
+V1–V3 ban đầu có **27 bảng ứng dụng + 1 view**. Toàn bộ migration hiện tại có **34 bảng ứng dụng + 2 view**, chưa tính `flyway_schema_history`. Trong 27 bảng ban đầu có `refresh_tokens` phục vụ đăng nhập, không có trong DBML gốc.
 
 Database cũ chỉ có ba bảng xác thực được baseline ở V1, sau đó áp dụng V2 và V3. Không xóa hoặc đổi ID người dùng, password hash hay trạng thái tài khoản. Không dùng `ddl-auto=update` nữa; Flyway quản lý cấu trúc, Hibernate chỉ `validate`.
 
 Không sửa migration đã áp dụng; tạo V4, V5… cho các thay đổi sau. Ứng dụng tắt `baseline-on-migrate` để không tự nhận nhầm một database bất kỳ làm phiên bản V1; chỉ công cụ chuyển đổi `--apply` bật tùy chọn này cho database xác thực cũ đã kiểm tra.
 
-## Giới hạn của bước tạo database
+## Schema và dữ liệu của dự án
 
-- Chưa tạo API/CRUD, JPA entity nghiệp vụ, form Flow 1 hay tích hợp Firebase. `image_url` chỉ lưu URL.
+- Các API và giao diện chính cho Flow 1–5 đã được triển khai trong backend/frontend; xem trạng thái cụ thể trong `product-requirements-analysis.md`.
+- Đây là dự án học tập nên dữ liệu demo, cuộc đua mô phỏng và chỉ số mô phỏng được dùng có chủ đích. Chúng không đến từ cảm biến thật.
+- Ảnh hồ sơ ngựa và ảnh sự cố dùng private Supabase Storage, được upload qua backend và cấp signed URL có thời hạn.
 - Mặc định ngựa: `Healthy`, `Unknown`, `is_training_locked=false`, ảnh và `deleted_at` là NULL.
 - Xóa ngựa phải dùng `UPDATE horses SET deleted_at = CURRENT_TIMESTAMP ...`; tuyệt đối không gọi `DELETE FROM horses` trong CRUD vì các FK cascade theo DBML sẽ xóa lịch sử.
-- DB chưa tự kiểm tra sức chứa chuồng hay role/status của chủ sở hữu. Service Flow 1 phải kiểm tra trong transaction, khóa chuồng khi cần để tránh hai request xếp quá sức chứa.
+- Database không tự kiểm tra sức chứa chuồng hay role/status của chủ sở hữu. `HorseService` kiểm tra trong transaction và khóa chuồng khi cần để tránh hai request xếp quá sức chứa.
 - Mọi truy vấn ngựa phải lọc `deleted_at IS NULL`; Horse Owner phải được giới hạn bằng `owner_id` ở backend.
 - Không có trigger cập nhật `updated_at` hoặc dữ liệu realtime; chức năng tương ứng phải cập nhật khi ghi dữ liệu.
 - RLS không thay thế kiểm tra role tại Spring API. Không thêm policy Supabase đọc/ghi công khai cho các bảng nghiệp vụ.
