@@ -163,10 +163,10 @@ public class HorseService {
         }
         if(id==null) {
             id=UUID.randomUUID();
-            db.update("INSERT INTO horses(id,horse_name,breed,birth_year,height_cm,pedigree_father,pedigree_mother,image_url,stable_box_id,owner_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",id.toString(),request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),time.utcNow());
+            db.update("INSERT INTO horses(id,horse_name,breed,birth_year,height_cm,current_weight_kg,pedigree_father,pedigree_mother,image_url,stable_box_id,owner_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",id.toString(),request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.currentWeightKg(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),time.utcNow());
             audit(actor.id(), "CREATE_HORSE: " + id);
         } else {
-            db.update("UPDATE horses SET horse_name=?,breed=?,birth_year=?,height_cm=?,pedigree_father=?,pedigree_mother=?,image_url=?,stable_box_id=?,owner_id=? WHERE id=?",request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),id.toString());
+            db.update("UPDATE horses SET horse_name=?,breed=?,birth_year=?,height_cm=?,current_weight_kg=?,pedigree_father=?,pedigree_mother=?,image_url=?,stable_box_id=?,owner_id=? WHERE id=?",request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.currentWeightKg(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),id.toString());
             audit(actor.id(), "UPDATE_HORSE: " + id);
             if (!Objects.equals(old.get("owner_id"), request.ownerId())) audit(actor.id(), "CHANGE_HORSE_OWNER: " + id);
         }
@@ -182,12 +182,13 @@ public class HorseService {
         String breed = request.breed();
         Integer birthYear = request.birthYear();
         var heightCm = request.heightCm();
+        var currentWeightKg = request.currentWeightKg();
         String father = request.pedigreeFather();
         String mother = request.pedigreeMother();
         String stable = request.stableBoxId().toString();
         Long owner = request.ownerId();
         String image = request.imagePath();
-        var merged = new HorseRequest(horseName, breed, birthYear, heightCm, father, mother, image, UUID.fromString(stable), owner, request.confirmOwnerChange());
+        var merged = new HorseRequest(horseName, breed, birthYear, heightCm, currentWeightKg, father, mother, image, UUID.fromString(stable), owner, request.confirmOwnerChange());
         return save(actor, id, merged);
     }
     public List<Map<String,Object>> stables() {

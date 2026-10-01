@@ -23,6 +23,7 @@ Optional list filters (manager/trainer only): `search` (literal case-insensitive
   "breed": "Thoroughbred",
   "birthYear": 2020,
   "heightCm": 162.5,
+  "currentWeightKg": 452.0,
   "pedigreeFather": "Sire",
   "pedigreeMother": "Dam",
   "stableBoxId": "00000000-0000-0000-0000-000000000001",
@@ -32,7 +33,7 @@ Optional list filters (manager/trainer only): `search` (literal case-insensitive
 }
 ```
 
-Stable selection is required. Height (`heightCm`, centimeters) is optional and maintained with the basic horse profile. The horse detail response also includes current weight from the latest recorded training metric, falling back to `horses.current_weight_kg`; Head Trainer metric entry updates that current value. Owner/image and pedigree are optional. Update sends the full editable profile; null/omitted imagePath retains the existing image. Changing/removing the owner requires confirmOwnerChange=true (otherwise 409). Operational fields are never written from this request. Capacity admissions lock the stable row transactionally. No stable creation endpoint is included in Flow 1; populate the stable catalog through its management flow or controlled database setup.
+Stable selection is required. Height (`heightCm`, centimeters) and current weight (`currentWeightKg`, kilograms) are optional and maintained with the basic horse profile. The horse detail response includes the latest recorded training metric weight when available, falling back to `horses.current_weight_kg`. Head Trainer metric entry updates that current value. Owner/image and pedigree are optional. Update sends the full editable profile; null/omitted imagePath retains the existing image. Changing/removing the owner requires confirmOwnerChange=true (otherwise 409). Operational fields are never written from this request. Capacity admissions lock the stable row transactionally. No stable creation endpoint is included in Flow 1; populate the stable catalog through its management flow or controlled database setup.
 
 Owner lookup returns `{items, hasMore, page, size}` and does not return the full owner directory. Enter at least three characters to search name, email, or phone; a numeric owner ID (also accepted as `#123`) can be searched directly. Each result includes its unique email and owner ID so same-name owners can be distinguished. PostgreSQL trigram indexes support substring search at larger directory sizes.
 

@@ -134,7 +134,7 @@
 
 ### Ràng buộc
 
-Hồ sơ cơ bản sửa tên, giống, năm sinh, chiều cao đến vai, pedigree, ảnh, chuồng và owner. Cân nặng hiện tại lấy từ lần ghi metrics mới nhất của Head Trainer; màn hình hồ sơ chỉ hiển thị cân nặng, không sửa metrics, status sức khỏe, readiness, khóa huấn luyện hay lịch sử.
+Hồ sơ cơ bản sửa tên, giống, năm sinh, chiều cao đến vai, cân nặng hiện tại, pedigree, ảnh, chuồng và owner. Cân nặng nhập trong hồ sơ là giá trị ban đầu/hiện hành; khi Head Trainer ghi metrics mới, cân nặng mới nhất từ metrics sẽ được dùng làm cân nặng hiện tại. Màn hình hồ sơ không sửa lịch sử metrics, status sức khỏe, readiness hay khóa huấn luyện.
 
 ### Tiêu chí hoàn thành
 
