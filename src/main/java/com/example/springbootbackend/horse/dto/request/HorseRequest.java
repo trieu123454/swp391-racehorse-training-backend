@@ -2,6 +2,7 @@ package com.example.springbootbackend.horse.dto.request;
 
 import jakarta.validation.constraints.*;
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 
 public record HorseRequest(
@@ -9,7 +10,7 @@ public record HorseRequest(
         @Size(max=50) String breed,
         @JsonAlias("birth_year") @Min(1900) Integer birthYear,
         @JsonAlias("height_cm") @DecimalMin("50.0") @DecimalMax("250.0") @Digits(integer=3,fraction=1) BigDecimal heightCm,
-        @JsonAlias("current_weight_kg") @DecimalMin("100.0") @DecimalMax("900.0") @Digits(integer=3,fraction=2) BigDecimal currentWeightKg,
+        @JsonProperty("currentWeightKg") @JsonAlias("current_weight_kg") @DecimalMin("100.0") @DecimalMax("900.0") @Digits(integer=3,fraction=2) BigDecimal currentWeightKg,
         @Size(max=100) String pedigreeFather,
         @Size(max=100) String pedigreeMother,
         @JsonAlias("image_url") @Size(max=512) String imagePath,
