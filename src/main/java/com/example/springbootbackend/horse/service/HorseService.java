@@ -70,7 +70,7 @@ public class HorseService {
         var items = db.queryForList("SELECT " + columns + " FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users u ON u.user_id=h.owner_id"+where+" ORDER BY h.created_at DESC,h.id LIMIT ? OFFSET ?",args.toArray());
         items=items.stream().map(row -> {
             Object latestWeight=row.remove("latest_metric_weight_kg");
-            if(latestWeight!=null) row.put("current_weight_kg",latestWeight);
+            if(row.get("current_weight_kg")==null && latestWeight!=null) row.put("current_weight_kg",latestWeight);
             return actor.role().equals("GROOM") ? groomHorseSummary(row) : row;
         }).toList();
         return Map.of("items",items,"data",items,"total",total,"page",page,"size",size,"limit",size);
@@ -95,7 +95,7 @@ public class HorseService {
         if(rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND,"Không tìm thấy ngựa");
         var horse=rows.getFirst();
         Object latestWeight=horse.remove("latest_metric_weight_kg");
-        if(latestWeight!=null) horse.put("current_weight_kg",latestWeight);
+        if(horse.get("current_weight_kg")==null && latestWeight!=null) horse.put("current_weight_kg",latestWeight);
         if(actor.role().equals("HORSE_OWNER") && (!(horse.get("owner_id") instanceof Number owner) || owner.longValue()!=actor.id()))
             throw new ResponseStatusException(FORBIDDEN,"Ngựa không thuộc sở hữu của bạn");
         horse.put("stable_box", Map.of("id", horse.get("stable_box_id"), "box_code", horse.get("box_code")));
@@ -130,7 +130,7 @@ public class HorseService {
         }
         result.put("current_status",row.get("current_status"));
         result.put("height_cm",row.get("height_cm"));
-        result.put("current_weight_kg",row.get("latest_metric_weight_kg") == null ? row.get("current_weight_kg") : row.get("latest_metric_weight_kg"));
+        result.put("current_weight_kg",row.get("current_weight_kg") == null ? row.get("latest_metric_weight_kg") : row.get("current_weight_kg"));
         return result;
     }
 

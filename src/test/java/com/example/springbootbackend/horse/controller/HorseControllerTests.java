@@ -60,6 +60,24 @@ class HorseControllerTests {
         mvc.perform(put("/api/horses/"+id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(update))
             .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning")).andExpect(jsonPath("$.current_status").value("Healthy")).andExpect(jsonPath("$.is_training_locked").value(false));
     }
+    @Test void profileWeightRemainsVisibleWhenTrainingMetricsExist() throws Exception {
+        String createBody=body(owner()).replace("\"stableBoxId\"", "\"currentWeightKg\":500,\"stableBoxId\"");
+        var created=mvc.perform(post("/api/horses").with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(createBody))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.current_weight_kg").value(500)).andReturn();
+        String id=json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        db.update("INSERT INTO training_metrics_logs(id,horse_id,body_weight_kg) VALUES (?,?,?)",UUID.randomUUID().toString(),id,420);
+
+        mvc.perform(get("/api/horses/"+id).with(user("CLUB_MANAGER@test.com")))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.current_weight_kg").value(500));
+        mvc.perform(get("/api/horses").with(user("CLUB_MANAGER@test.com")))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(500));
+
+        String updateBody=body(owner()).replace("Thunder", "Lightning").replace("\"stableBoxId\"", "\"currentWeightKg\":510,\"stableBoxId\"");
+        mvc.perform(put("/api/horses/"+id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(updateBody))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning")).andExpect(jsonPath("$.current_weight_kg").value(510));
+        mvc.perform(get("/api/horses").with(user("CLUB_MANAGER@test.com")))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(510));
+    }
     @Test void softDeleteRetainsHistoryAndRequiresConfirmation() throws Exception {
         String id=createHorse();
         db.update("INSERT INTO medical_records(id,horse_id,diagnosis) VALUES (?,?,'Injury')",UUID.randomUUID().toString(),id);
@@ -75,7 +93,7 @@ class HorseControllerTests {
         mvc.perform(get("/api/horses?search=thun&currentStatus=Healthy&isTrainingLocked=false").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(1));
         mvc.perform(get("/api/horses?search=thun&currentStatus=Injured").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(0));
         mvc.perform(get("/api/horses?search=%25").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(0));
-        mvc.perform(put("/api/horses/"+id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content("{\"horseName\":\"Thunder\",\"stableBoxId\":\""+box+"\"}" )).andExpect(status().isOk());
+        mvc.perform(put("/api/horses/"+id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(body(owner()))).andExpect(status().isOk());
         mvc.perform(post("/api/horses").with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(body(owner()).replace("Thunder","   "))).andExpect(status().isBadRequest());
     }
     @Test void invalidAndOversizeUploadsRejected() throws Exception {
