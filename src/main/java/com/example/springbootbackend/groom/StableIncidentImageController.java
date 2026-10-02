@@ -38,12 +38,16 @@ public class StableIncidentImageController {
         Map<String,Object> account=accounts.getFirst();
         String role=(String)account.get("role_name");
         if(!IMAGE_ROLES.contains(role)) throw new ResponseStatusException(FORBIDDEN,"This role cannot view incident photos");
-        List<Map<String,Object>> incidents=db.queryForList("SELECT groom_id,image_url FROM stable_incidents WHERE id=?",id.toString());
+        List<Map<String,Object>> incidents=db.queryForList("SELECT groom_id,assigned_to,image_url FROM stable_incidents WHERE id=?",id.toString());
         if(incidents.isEmpty()) throw new ResponseStatusException(NOT_FOUND,"Incident not found");
         Map<String,Object> incident=incidents.getFirst();
-        if("GROOM".equals(role) && (! (incident.get("groom_id") instanceof Number groomId)
-                || groomId.longValue()!=((Number)account.get("user_id")).longValue()))
-            throw new ResponseStatusException(FORBIDDEN,"Groom can only view photos from their own reports");
+        if("GROOM".equals(role)) {
+            long userId=((Number)account.get("user_id")).longValue();
+            boolean reporter=incident.get("groom_id") instanceof Number groomId && groomId.longValue()==userId;
+            boolean assignee=incident.get("assigned_to") instanceof Number assignedTo && assignedTo.longValue()==userId;
+            if(!reporter && !assignee)
+                throw new ResponseStatusException(FORBIDDEN,"Groom can only view photos from their reports or assigned incidents");
+        }
         Object path=incident.get("image_url");
         if(!(path instanceof String value) || !value.startsWith("incidents/")) return Map.of("hasImage",false);
         return storage.signedUrl(value);

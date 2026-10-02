@@ -97,6 +97,12 @@ public class GroomController {
         return service.incidents(user.getName(), status, horseId);
     }
 
+    @PatchMapping("/incidents/{id}/result")
+    public Map<String, Object> submitIncidentResult(Principal user, HttpServletRequest request,
+            @PathVariable UUID id, @RequestBody JsonNode body) {
+        return service.submitIncidentResult(user.getName(), request.getRemoteAddr(), id, body);
+    }
+
     @GetMapping("/inventory")
     public Map<String, Object> inventory(Principal user,
             @RequestParam(required = false) String category,

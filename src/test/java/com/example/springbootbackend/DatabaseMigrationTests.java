@@ -23,7 +23,7 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(13);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(14);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")) {
@@ -49,7 +49,7 @@ class DatabaseMigrationTests {
             s.executeUpdate("insert into roles(role_id,role_name) values (1,'HORSE_OWNER'),(2,'GROOM')");
             s.executeUpdate("insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(12);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(13);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();

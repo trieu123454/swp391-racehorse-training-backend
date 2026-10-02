@@ -128,6 +128,15 @@ public class ClubManagerService {
                 +"ORDER BY u.full_name,u.user_id");
     }
 
+    public Map<String,Object> incidentAssignees(String managerEmail) {
+        requireManager(managerEmail);
+        var rows = db.queryForList("SELECT u.user_id AS id,u.full_name,u.email,r.role_name FROM users u "
+                +"JOIN roles r ON r.role_id=u.role_id WHERE r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM') "
+                +"AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL "
+                +"ORDER BY r.role_name,u.full_name,u.user_id");
+        return Map.of("data", rows);
+    }
+
     @Transactional
     public UserApprovalResponse approve(String managerEmail, Long userId) {
         long managerId = requireManager(managerEmail);
@@ -292,7 +301,7 @@ public class ClubManagerService {
                 +"WHERE ce.event_date>=? AND ce.event_date<=?",Long.class,start,end);
         Long completedTasks = db.queryForObject("SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
                 +"WHERE ce.event_date>=? AND ce.event_date<=? AND t.status='Completed'",Long.class,start,end);
-        Long pendingIncidents = db.queryForObject("SELECT count(*) FROM stable_incidents WHERE status='Pending'",Long.class);
+        Long pendingIncidents = db.queryForObject("SELECT count(*) FROM stable_incidents WHERE status IN ('Pending','InProgress','AwaitingClosure')",Long.class);
         Map<String,Object> training = db.queryForList("SELECT count(*) FILTER (WHERE ts.status='Scheduled') AS scheduled,"
                 +"count(*) FILTER (WHERE ts.status='Completed') AS completed,"
                 +"count(*) FILTER (WHERE ts.status='InProgress') AS in_progress,"
@@ -558,26 +567,106 @@ public class ClubManagerService {
 
     public Map<String,Object> incidents(String managerEmail,String status) {
         requireManager(managerEmail);
-        String selected=StringUtils.hasText(status)?status.trim():"Pending";
-        if(!List.of("Pending","Resolved").contains(selected)) throw new ResponseStatusException(BAD_REQUEST,"status must be Pending or Resolved");
-        var rows=db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,g.full_name AS groom_name,i.issue_description,"
-                +"i.image_url,i.status,i.reviewed_by,r.full_name AS reviewer_name,i.created_at,i.resolved_at "
-                +"FROM stable_incidents i JOIN horses h ON h.id=i.horse_id LEFT JOIN users g ON g.user_id=i.groom_id "
-                +"LEFT JOIN users r ON r.user_id=i.reviewed_by WHERE i.status=? ORDER BY i.created_at DESC,i.id",VetRows.MAPPER,selected);
+        String selected=StringUtils.hasText(status)?status.trim():"Open";
+        if(!List.of("Open","Pending","InProgress","AwaitingClosure","Resolved","All").contains(selected))
+            throw new ResponseStatusException(BAD_REQUEST,"status must be Open, Pending, InProgress, AwaitingClosure, Resolved, or All");
+        String filter = switch(selected) {
+            case "Open" -> "WHERE i.status IN ('Pending','InProgress','AwaitingClosure')";
+            case "All" -> "";
+            default -> "WHERE i.status=?";
+        };
+        var rows = "Open".equals(selected) || "All".equals(selected)
+                ? db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,g.full_name AS groom_name,i.issue_description,"
+                    +"i.image_url,i.is_emergency,i.status,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,"
+                    +"i.assignment_note,i.assigned_by,i.assigned_at,i.result_note,i.result_by,i.result_at,"
+                    +"i.reviewed_by,r.full_name AS reviewer_name,i.created_at,i.resolved_at "
+                    +"FROM stable_incidents i JOIN horses h ON h.id=i.horse_id LEFT JOIN users g ON g.user_id=i.groom_id "
+                    +"LEFT JOIN users a ON a.user_id=i.assigned_to LEFT JOIN users r ON r.user_id=i.reviewed_by "
+                    +filter+" ORDER BY i.is_emergency DESC,i.created_at DESC,i.id",VetRows.MAPPER)
+                : db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,g.full_name AS groom_name,i.issue_description,"
+                    +"i.image_url,i.is_emergency,i.status,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,"
+                    +"i.assignment_note,i.assigned_by,i.assigned_at,i.result_note,i.result_by,i.result_at,"
+                    +"i.reviewed_by,r.full_name AS reviewer_name,i.created_at,i.resolved_at "
+                    +"FROM stable_incidents i JOIN horses h ON h.id=i.horse_id LEFT JOIN users g ON g.user_id=i.groom_id "
+                    +"LEFT JOIN users a ON a.user_id=i.assigned_to LEFT JOIN users r ON r.user_id=i.reviewed_by "
+                    +filter+" ORDER BY i.is_emergency DESC,i.created_at DESC,i.id",VetRows.MAPPER,selected);
         return Map.of("data",rows);
+    }
+
+    @Transactional
+    public Map<String,Object> assignIncident(String managerEmail,String ip,UUID incidentId,JsonNode body) {
+        long managerId=requireManager(managerEmail); String id=incidentId.toString();
+        var fields=VetInput.parse(body,"assigned_role:20","assignee_id:long","assignment_note:1000");
+        VetInput.choice(fields,"assigned_role","HEAD_TRAINER","VETERINARIAN","GROOM","CLUB_MANAGER");
+        VetInput.required(fields,"assignment_note");
+        String role=fields.get("assigned_role").toString();
+        long assigneeId;
+        if("CLUB_MANAGER".equals(role)) {
+            if(fields.containsKey("assignee_id")) throw VetException.invalid("assignee_id","Club Manager assignment is the current manager");
+            assigneeId=managerId;
+        } else {
+            VetInput.required(fields,"assignee_id");
+            assigneeId=((Number)fields.get("assignee_id")).longValue();
+            Long valid=db.queryForObject("SELECT count(*) FROM users u JOIN roles r ON r.role_id=u.role_id "
+                    +"WHERE u.user_id=? AND r.role_name=? AND u.status='APPROVED' AND u.must_change_password=FALSE "
+                    +"AND u.deleted_at IS NULL",Long.class,assigneeId,role);
+            if(valid==null || valid==0) throw VetException.invalid("assignee_id","Assignee account is not active");
+        }
+        var rows=db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
+                        +"JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",VetRows.MAPPER,id);
+        if(rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND,"Incident not found");
+        Map<String,Object> incident=rows.getFirst();
+        if(!List.of("Pending","InProgress").contains(incident.get("status")))
+            throw new ResponseStatusException(CONFLICT,"Only a pending or active incident can be assigned");
+        Object previous=incident.get("assigned_to");
+        db.update("UPDATE stable_incidents SET status='InProgress',assigned_to=?,assigned_role=?,assignment_note=?,"
+                +"assigned_by=?,assigned_at=?,reviewed_by=?,result_note=NULL,result_by=NULL,result_at=NULL WHERE id=?",
+                assigneeId,role,fields.get("assignment_note"),managerId,time.utcNow(),managerId,id);
+        String horse=(String)incident.get("horse_name");
+        String msg="Incident for "+horse+" assigned to you. Instructions: "+fields.get("assignment_note");
+        notifyUser(assigneeId,msg);
+        if(previous instanceof Number old && old.longValue()!=assigneeId) notifyUser(old.longValue(),"Incident for "+horse+" was reassigned.");
+        if(incident.get("groom_id") instanceof Number reporter && reporter.longValue()!=assigneeId)
+            notifyUser(reporter.longValue(),"Incident for "+horse+" is assigned to "+role+". Instructions: "+fields.get("assignment_note"));
+        audit(managerId,"ASSIGN_STABLE_INCIDENT: "+id+" to "+role+":"+assigneeId,ip);
+        return Map.of("id",id,"status","InProgress","assigned_to",assigneeId,"assigned_role",role,
+                "assignment_note",fields.get("assignment_note"));
+    }
+
+    @Transactional
+    public Map<String,Object> submitManagerIncidentResult(String managerEmail,String ip,UUID incidentId,JsonNode body) {
+        long managerId=requireManager(managerEmail); String id=incidentId.toString();
+        var fields=VetInput.parse(body,"result_note:2000"); VetInput.required(fields,"result_note");
+        var rows=db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
+                        +"JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",VetRows.MAPPER,id);
+        if(rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND,"Incident not found");
+        Map<String,Object> incident=rows.getFirst();
+        if(!"InProgress".equals(incident.get("status")) || !(incident.get("assigned_to") instanceof Number assigned)
+                || assigned.longValue()!=managerId)
+            throw new ResponseStatusException(CONFLICT,"Only the Manager assigned to this incident can record its result");
+        db.update("UPDATE stable_incidents SET result_note=?,result_by=?,result_at=?,status='AwaitingClosure' WHERE id=?",
+                fields.get("result_note"),managerId,time.utcNow(),id);
+        audit(managerId,"SUBMIT_STABLE_INCIDENT_RESULT: "+id,ip);
+        Object reporter=incident.get("groom_id");
+        if(reporter instanceof Number recipient) notifyUser(recipient.longValue(),"A result was recorded for the incident on "+incident.get("horse_name")+".");
+        return Map.of("id",id,"status","AwaitingClosure","result_note",fields.get("result_note"));
     }
 
     @Transactional
     public Map<String,Object> resolveIncident(String managerEmail,String ip,UUID incidentId) {
         long managerId=requireManager(managerEmail); String id=incidentId.toString();
-        var rows=db.queryForList("SELECT i.id,i.status,i.groom_id,h.horse_name FROM stable_incidents i "
+        var rows=db.queryForList("SELECT i.id,i.status,i.groom_id,i.assigned_to,i.result_note,h.horse_name FROM stable_incidents i "
                 + "JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",id);
         if(rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND,"Incident not found");
-        if(!"Pending".equals(rows.getFirst().get("status"))) throw new ResponseStatusException(CONFLICT,"Incident is already resolved");
+        if(!"AwaitingClosure".equals(rows.getFirst().get("status"))) throw new ResponseStatusException(CONFLICT,"Incident must have a recorded result before it can be closed");
+        if(rows.getFirst().get("result_note")==null) throw new ResponseStatusException(CONFLICT,"Incident result is required before closing");
         db.update("UPDATE stable_incidents SET status='Resolved',reviewed_by=?,resolved_at=? WHERE id=?",managerId,time.utcNow(),id);
         Object groomId=rows.getFirst().get("groom_id");
         if(groomId instanceof Number recipient)
             notifyUser(recipient.longValue(),"Your incident report for "+rows.getFirst().get("horse_name")+" has been resolved.");
+        Object assignee=rows.getFirst().get("assigned_to");
+        if(assignee instanceof Number recipient && (!(groomId instanceof Number reporter) || reporter.longValue()!=recipient.longValue()))
+            notifyUser(recipient.longValue(),"The incident assigned to you has been closed.");
         audit(managerId,"RESOLVE_STABLE_INCIDENT: "+id,ip);
         return Map.of("id",id,"status","Resolved");
     }

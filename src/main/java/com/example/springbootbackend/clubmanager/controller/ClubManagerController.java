@@ -162,8 +162,25 @@ public class ClubManagerController {
     }
 
     @GetMapping("/groom-incidents")
-    public Map<String,Object> incidents(Principal principal,@RequestParam(defaultValue="Pending") String status) {
+    public Map<String,Object> incidents(Principal principal,@RequestParam(defaultValue="Open") String status) {
         return service.incidents(principal.getName(),status);
+    }
+
+    @GetMapping("/groom-incidents/assignees")
+    public Map<String,Object> incidentAssignees(Principal principal) {
+        return service.incidentAssignees(principal.getName());
+    }
+
+    @PatchMapping("/groom-incidents/{id}/assignment")
+    public Map<String,Object> assignIncident(Principal principal,HttpServletRequest request,
+            @PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.assignIncident(principal.getName(),request.getRemoteAddr(),id,body);
+    }
+
+    @PatchMapping("/groom-incidents/{id}/result")
+    public Map<String,Object> submitIncidentResult(Principal principal,HttpServletRequest request,
+            @PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.submitManagerIncidentResult(principal.getName(),request.getRemoteAddr(),id,body);
     }
 
     @PatchMapping("/groom-incidents/{id}/resolve")

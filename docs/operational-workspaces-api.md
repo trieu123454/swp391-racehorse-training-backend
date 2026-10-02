@@ -45,8 +45,15 @@ Uploaded paths are private. The incident record accepts an upload path created b
 | GET | `/api/club-manager/groom-tasks?date=` | Daily care assignments |
 | POST | `/api/club-manager/groom-tasks` | Assign a `Feeding`, `Cleaning`, `Bathing`, or `IceBath` task |
 | PATCH | `/api/club-manager/groom-tasks/{id}` | Reassign a pending task (`{"groom_id":123}`) or cancel it (`{"action":"Cancel"}`) |
-| GET | `/api/club-manager/groom-incidents?status=Pending` | List incidents for review |
-| PATCH | `/api/club-manager/groom-incidents/{id}/resolve` | Resolve a pending incident |
+| GET | `/api/club-manager/groom-incidents?status=Open` | List open, resolved, or all incidents for review |
+| GET | `/api/club-manager/groom-incidents/assignees` | List active Head Trainers, Veterinarians, and Grooms for assignment |
+| PATCH | `/api/club-manager/groom-incidents/{id}/assignment` | Assign or reassign an incident to a staff member or the current Club Manager |
+| PATCH | `/api/club-manager/groom-incidents/{id}/result` | Record the result when the current Club Manager is assigned |
+| PATCH | `/api/club-manager/groom-incidents/{id}/resolve` | Close an incident after a result has been recorded |
+| GET | `/api/head-trainer/stable-incidents` | List incidents assigned to the current Head Trainer |
+| PATCH | `/api/head-trainer/stable-incidents/{id}/result` | Submit an assigned incident's result for Club Manager review |
+
+The Club Manager selects an assignee role first, then searches active people by name or email. The assigned Head Trainer, Veterinarian, or Groom can submit a result; the Club Manager can also submit a result when self-assigned. The Club Manager closes the incident after review.
 | POST | `/api/club-manager/financial-transactions` | Record an Owner-visible `Care`, `Medical`, `Prize`, or `Other` transaction |
 
 Club Manager lock and role-change operations return a conflict while a Groom has future training sessions or pending care tasks. Reassign or cancel those assignments first.

@@ -62,6 +62,48 @@ public class HeadTrainerService {
         this.injuryAlertSpeed = injuryAlertSpeed;
     }
 
+    public Map<String,Object> stableIncidents(String email) {
+        long trainerId = requireTrainer(email);
+        var rows = db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,g.full_name AS groom_name,"
+                +"i.issue_description,i.image_url,i.is_emergency,i.status,i.assigned_to,i.assigned_role,"
+                +"a.full_name AS assignee_name,i.assignment_note,i.result_note,i.created_at,i.assigned_at,i.result_at,"
+                +"CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me "
+                +"FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
+                +"LEFT JOIN users g ON g.user_id=i.groom_id LEFT JOIN users a ON a.user_id=i.assigned_to "
+                +"WHERE i.assigned_to=? AND i.assigned_role='HEAD_TRAINER' AND i.status IN ('InProgress','AwaitingClosure') "
+                +"ORDER BY i.is_emergency DESC,i.created_at DESC,i.id",VetRows.MAPPER,trainerId,trainerId);
+        return Map.of("data",rows);
+    }
+
+    @Transactional
+    public Map<String,Object> submitIncidentResult(String email,String ip,UUID incidentId,JsonNode body) {
+        long trainerId = requireTrainer(email);
+        var fields = VetInput.parse(body,"result_note:2000");
+        VetInput.required(fields,"result_note");
+        String id = incidentId.toString();
+        var rows = db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
+                +"JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",VetRows.MAPPER,id);
+        if (rows.isEmpty()) throw new VetException(404,"INCIDENT_NOT_FOUND","Incident not found");
+        Map<String,Object> incident = rows.getFirst();
+        if (!"InProgress".equals(incident.get("status"))
+                || !(incident.get("assigned_to") instanceof Number assigned)
+                || assigned.longValue() != trainerId)
+            throw new VetException(403,"FORBIDDEN","Incident is not assigned to this head trainer");
+
+        db.update("UPDATE stable_incidents SET result_note=?,result_by=?,result_at=?,status='AwaitingClosure' WHERE id=?",
+                fields.get("result_note"),trainerId,time.utcNow(),id);
+        audit.record(trainerId,ip,"SUBMIT_STABLE_INCIDENT_RESULT:"+id);
+        String message = "Incident result submitted for "+incident.get("horse_name")+"; Club Manager review is pending.";
+        for (var manager : db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                +"WHERE r.role_name='CLUB_MANAGER' AND u.status='APPROVED' AND u.must_change_password=FALSE "
+                +"AND u.deleted_at IS NULL"))
+            notifications.schedule(((Number)manager.get("user_id")).longValue(),"Stable_Incidents",id,message,time.now());
+        if (incident.get("groom_id") instanceof Number reporter)
+            notifications.schedule(reporter.longValue(),"Stable_Incidents",id,
+                    "A result was submitted for your incident on "+incident.get("horse_name")+".",time.now());
+        return Map.of("id",id,"status","AwaitingClosure","result_note",fields.get("result_note"));
+    }
+
     public Map<String, Object> overview(String email, boolean includeSimulated) {
         requireTrainer(email);
         String realFilter = includeSimulated ? "" : " AND is_simulated=FALSE";

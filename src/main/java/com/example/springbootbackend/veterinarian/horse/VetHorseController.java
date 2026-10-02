@@ -17,7 +17,15 @@ public class VetHorseController {
     @GetMapping("/vet/health-overview")
     public Map<String,Object> overview(Principal p,@RequestParam(required=false) String section) { return service.overview(p.getName(),section); }
     @GetMapping("/vet/stable-incidents")
-    public Map<String,Object> incidents(Principal p,@RequestParam(defaultValue="Pending") String status) { return service.incidents(p.getName(),status); }
+    public Map<String,Object> incidents(Principal p,@RequestParam(defaultValue="Open") String status) { return service.incidents(p.getName(),status); }
+    @PatchMapping("/vet/stable-incidents/{id}/claim")
+    public Map<String,Object> claimIncident(Principal p,HttpServletRequest r,@PathVariable UUID id) {
+        return service.claimEmergency(p.getName(),r.getRemoteAddr(),id);
+    }
+    @PatchMapping("/vet/stable-incidents/{id}/result")
+    public Map<String,Object> submitIncidentResult(Principal p,HttpServletRequest r,@PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.submitIncidentResult(p.getName(),r.getRemoteAddr(),id,body);
+    }
     @PatchMapping("/horses/{id}/health-status")
     public Map<String,Object> status(Principal p,HttpServletRequest r,@PathVariable UUID id,@RequestBody JsonNode body) { return service.status(p.getName(),r.getRemoteAddr(),id.toString(),body); }
     @PutMapping("/horses/{id}/training-lock")

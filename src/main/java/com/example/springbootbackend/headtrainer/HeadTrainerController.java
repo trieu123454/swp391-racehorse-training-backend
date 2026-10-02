@@ -32,6 +32,17 @@ public class HeadTrainerController {
         return service.overview(user.getName(), include_simulated);
     }
 
+    @GetMapping("/head-trainer/stable-incidents")
+    public Map<String,Object> stableIncidents(Principal user) {
+        return service.stableIncidents(user.getName());
+    }
+
+    @PatchMapping("/head-trainer/stable-incidents/{id}/result")
+    public Map<String,Object> submitIncidentResult(Principal user,HttpServletRequest request,
+            @PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.submitIncidentResult(user.getName(),request.getRemoteAddr(),id,body);
+    }
+
     @GetMapping("/horses/{horseId}/training-metrics")
     public List<Map<String, Object>> metrics(Principal user, @PathVariable UUID horseId,
             @RequestParam(required = false) LocalDate from, @RequestParam(required = false) LocalDate to,

@@ -151,7 +151,7 @@ public class GroomWorkspaceService {
     @Transactional
     public Map<String, Object> reportIncident(String email, String ip, JsonNode body) {
         Map<String, Object> fields = VetInput.parse(body,
-                "horse_id:uuid", "issue_description:1000", "image_url:512");
+                "horse_id:uuid", "issue_description:1000", "image_url:512", "is_emergency:bool");
         VetInput.required(fields, "horse_id");
         long groomId = access.requireRole(email, "GROOM");
         String horseId = fields.get("horse_id").toString();
@@ -163,8 +163,10 @@ public class GroomWorkspaceService {
 
     public Map<String, Object> incidents(String email, String status, UUID horseId) {
         long groomId = access.requireRole(email, "GROOM");
-        String where = " WHERE i.groom_id=?";
+        String where = " WHERE (i.groom_id=? OR i.assigned_to=?)";
         List<Object> args = new ArrayList<>();
+        args.add(groomId);
+        args.add(groomId);
         args.add(groomId);
         if (status != null && !status.isBlank()) {
             where += " AND i.status=?";
@@ -174,12 +176,44 @@ public class GroomWorkspaceService {
             where += " AND i.horse_id=?";
             args.add(horseId.toString());
         }
-        var rows = db.query("SELECT i.id,i.horse_id,h.horse_name,i.issue_description,i.image_url,"
-                        + "i.status,i.created_at,i.resolved_at FROM stable_incidents i "
-                        + "JOIN horses h ON h.id=i.horse_id" + where
+        var rows = db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,i.issue_description,i.image_url,"
+                        + "i.status,i.is_emergency,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,"
+                        + "i.assignment_note,i.result_note,i.created_at,i.assigned_at,i.result_at,i.resolved_at,"
+                        + "CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me "
+                        + "FROM stable_incidents i JOIN horses h ON h.id=i.horse_id LEFT JOIN users a ON a.user_id=i.assigned_to" + where
                         + " ORDER BY i.created_at DESC,i.id DESC",
                 VetRows.MAPPER, args.toArray());
         return Map.of("data", rows);
+    }
+
+    @Transactional
+    public Map<String, Object> submitIncidentResult(String email, String ip, UUID incidentId, JsonNode body) {
+        long groomId = access.requireRole(email, "GROOM");
+        Map<String, Object> fields = VetInput.parse(body, "result_note:2000");
+        VetInput.required(fields, "result_note");
+        String id = incidentId.toString();
+        var rows = db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
+                        + "JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",
+                VetRows.MAPPER, id);
+        if (rows.isEmpty()) throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
+        Map<String, Object> incident = rows.getFirst();
+        Object assignedTo = incident.get("assigned_to");
+        if (!(assignedTo instanceof Number assigned) || assigned.longValue() != groomId)
+            throw new VetException(403, "FORBIDDEN", "Incident is not assigned to this Groom");
+        if (!"InProgress".equals(incident.get("status")))
+            throw new VetException(409, "INCIDENT_NOT_IN_PROGRESS", "Incident is not open for a result");
+
+        db.update("UPDATE stable_incidents SET result_note=?,result_by=?,result_at=?,status='AwaitingClosure' WHERE id=?",
+                fields.get("result_note"), groomId, time.utcNow(), id);
+        audit.record(groomId, ip, "SUBMIT_STABLE_INCIDENT_RESULT:" + id);
+        for (long manager : activeRecipients("CLUB_MANAGER"))
+            notifications.schedule(manager, "Stable_Incidents", id,
+                    "Incident result submitted for " + incident.get("horse_name") + "; Club Manager review is pending.", time.now());
+        Object reporter = incident.get("groom_id");
+        if (reporter instanceof Number recipient && recipient.longValue() != groomId)
+            notifications.schedule(recipient.longValue(), "Stable_Incidents", id,
+                    "A result was submitted for the incident reported on " + incident.get("horse_name") + ".", time.now());
+        return Map.of("id", id, "status", "AwaitingClosure", "result_note", fields.get("result_note"));
     }
 
     public Map<String, Object> inventory(String email, String category, boolean lowStockOnly) {
@@ -256,7 +290,7 @@ public class GroomWorkspaceService {
     }
 
     private Map<String, Object> incidentFields(JsonNode body) {
-        Map<String, Object> fields = VetInput.parse(body, "issue_description:1000", "image_url:512");
+        Map<String, Object> fields = VetInput.parse(body, "issue_description:1000", "image_url:512", "is_emergency:bool");
         VetInput.required(fields, "issue_description");
         return fields;
     }
@@ -271,15 +305,39 @@ public class GroomWorkspaceService {
             if(owned==null || owned==0) throw VetException.invalid("image_url","Upload this incident photo from your Groom account first");
         }
         String id = UUID.randomUUID().toString();
-        db.update("INSERT INTO stable_incidents(id,horse_id,groom_id,issue_description,image_url,status,created_at) "
-                        + "VALUES (?,?,?,?,?,'Pending',?)",
-                id, horseId, groomId, fields.get("issue_description"), fields.get("image_url"), time.utcNow());
+        boolean emergency = Boolean.TRUE.equals(fields.get("is_emergency"));
+        db.update("INSERT INTO stable_incidents(id,horse_id,groom_id,issue_description,image_url,is_emergency,status,created_at) "
+                        + "VALUES (?,?,?,?,?,?, 'Pending',?)",
+                id, horseId, groomId, fields.get("issue_description"), fields.get("image_url"), emergency, time.utcNow());
         audit.record(groomId, ip, "REPORT_STABLE_INCIDENT:" + id);
-        String horseName = db.queryForObject("SELECT horse_name FROM horses WHERE id=?", String.class, horseId);
-        String message = "New Groom incident for " + horseName + ": " + fields.get("issue_description");
-        for (long recipient : activeRecipients("VETERINARIAN", "CLUB_MANAGER"))
+        var horse = db.query("SELECT horse_name,owner_id FROM horses WHERE id=?", VetRows.MAPPER, horseId).getFirst();
+        String horseName = horse.get("horse_name").toString();
+        String message = (emergency ? "URGENT: " : "") + "New Groom incident for " + horseName + ": " + fields.get("issue_description");
+        for (long recipient : emergency ? activeRecipients("VETERINARIAN", "CLUB_MANAGER") : activeRecipients("CLUB_MANAGER"))
             notifications.schedule(recipient, "Stable_Incidents", id, message, time.now());
-        return db.query("SELECT id,horse_id,groom_id,issue_description,image_url,status,created_at "
+        List<Long> owners = db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                        + "WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' "
+                        + "AND u.deleted_at IS NULL AND u.must_change_password=FALSE",
+                Long.class, horse.get("owner_id"));
+        for (long ownerId : owners)
+            notifications.schedule(ownerId, "Stable_Incidents", id,
+                    (emergency ? "URGENT: " : "") + "A Groom reported an incident involving your horse " + horseName + ". "
+                            + fields.get("issue_description"), time.now());
+
+        List<Long> trainers = db.queryForList("SELECT DISTINCT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                        + "WHERE r.role_name='HEAD_TRAINER' AND u.status='APPROVED' AND u.deleted_at IS NULL "
+                        + "AND u.must_change_password=FALSE AND ("
+                        + "EXISTS (SELECT 1 FROM training_plans tp WHERE tp.horse_id=? AND tp.created_by=u.user_id "
+                        + "AND (tp.start_date IS NULL OR tp.start_date<=?) AND (tp.end_date IS NULL OR tp.end_date>=?)) "
+                        + "OR EXISTS (SELECT 1 FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
+                        + "WHERE ts.horse_id=? AND ts.created_by=u.user_id AND ts.status IN ('Scheduled','InProgress','Blocked') "
+                        + "AND ce.status IN ('Scheduled','InProgress','Blocked') AND ce.event_date>=?)) ORDER BY u.user_id",
+                Long.class, horseId, time.today(), time.today(), horseId, time.today());
+        for (long trainerId : trainers)
+            notifications.schedule(trainerId, "Stable_Incidents", id,
+                    (emergency ? "URGENT: " : "") + "A stable incident was reported for " + horseName
+                            + "; please review it because this horse has active training.", time.now());
+        return db.query("SELECT id,horse_id,groom_id,issue_description,image_url,is_emergency,status,created_at "
                         + "FROM stable_incidents WHERE id=?",
                 VetRows.MAPPER, id).getFirst();
     }
