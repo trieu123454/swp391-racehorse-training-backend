@@ -61,7 +61,7 @@ public class GroomHorseService {
         List<Map<String, Object>> events = new ArrayList<>();
         var training = db.query("SELECT ts.id AS training_schedule_id,ts.status,ts.session_type,"
                         + "ce.id AS event_id,ce.event_date,ce.start_time,ce.end_time,ts.notes,"
-                        + "h.id AS horse_id,h.horse_name FROM training_schedules ts "
+                        + "h.id AS horse_id,h.horse_name,EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.training_schedule_id=ts.id AND sim.status='Running') AS sensor_running FROM training_schedules ts "
                         + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
                         + "JOIN horses h ON h.id=ts.horse_id "
                         + "WHERE ts.assigned_groom_id=? AND ce.event_date=? AND ce.status<>'Cancelled' "
@@ -77,6 +77,7 @@ public class GroomHorseService {
             event.put("end_time", clock(row.get("end_time")));
             event.put("status", row.get("status"));
             event.put("session_type", row.get("session_type"));
+            event.put("sensor_running",row.get("sensor_running"));
             event.put("horse", horseRef(row));
             event.put("note", row.get("notes"));
             events.add(event);

@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
+import java.util.concurrent.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +38,7 @@ class HeadTrainerControllerTests {
     @Autowired JdbcTemplate db;
     @Autowired ObjectMapper json;
     @MockBean VetTime time;
+    @Autowired RaceSimulationService simulations;
     String horse;
     String otherHorse;
 
@@ -62,6 +64,7 @@ class HeadTrainerControllerTests {
         db.update("DELETE FROM users");
         addUser(HEAD, "HEAD_TRAINER");
         addUser("groom@test.com", "GROOM");
+        addUser("groom2@test.com", "GROOM");
         addUser("vet@test.com", "VETERINARIAN");
         horse = UUID.randomUUID().toString();
         otherHorse = UUID.randomUUID().toString();
@@ -88,7 +91,7 @@ class HeadTrainerControllerTests {
     }
 
     @Test
-    void metricsValidateRangesAlertAutomaticallyAndHideSimulationByDefault() throws Exception {
+    void metricsValidateRangesAlertAutomaticallyAndIncludeSimulationByDefault() throws Exception {
         String scheduleId = createSchedule(horse, null, "2026-09-28", "13:00", "14:00");
         db.update("UPDATE training_schedules SET status='Completed' WHERE id=?", scheduleId);
         db.update("UPDATE calendar_events SET status='Completed' WHERE source_table='training_schedules' AND source_id=?", scheduleId);
@@ -102,10 +105,9 @@ class HeadTrainerControllerTests {
         db.update("INSERT INTO training_metrics_logs(id,horse_id,recorded_by,max_heart_rate,avg_speed_kmh,stamina_score,is_simulated)"
                 + " VALUES (?,?,?,?,?,?,TRUE)", UUID.randomUUID().toString(), horse, uid(HEAD), 170, 48.2, 7.5);
         call(get("/api/horses/" + horse + "/training-metrics"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$[0].has_injury_alert").value(true))
-                .andExpect(jsonPath("$.length()").value(1));
-        call(get("/api/horses/" + horse + "/training-metrics?include_simulated=true"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+        call(get("/api/horses/" + horse + "/training-metrics?include_simulated=false"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
         assertThat(db.queryForObject("SELECT count(*) FROM audit_logs WHERE action_performed LIKE 'RECORD_TRAINING_METRICS:%'", Long.class)).isEqualTo(1);
     }
 
@@ -128,7 +130,7 @@ class HeadTrainerControllerTests {
     @Test
     void overlappingSessionsAndSameDayRacesAreRejected() throws Exception {
         createSchedule(horse, null, "2026-10-02", "06:00", "07:00");
-        call(body(post("/api/horses/" + horse + "/training-schedules"), schedule(null, "2026-10-02", "06:30", "07:30")))
+        call(body(post("/api/horses/" + horse + "/training-schedules"), schedule(db.queryForObject("SELECT id FROM training_plans WHERE horse_id=?",String.class,horse), "2026-10-02", "06:30", "07:30")))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("SCHEDULE_CONFLICT"));
         db.update("INSERT INTO races(id,race_name,race_date) VALUES (?,?,?)", UUID.randomUUID().toString(), "Morning Cup", LocalDate.of(2026, 10, 2));
         String race = db.queryForObject("SELECT id FROM races", String.class);
@@ -137,50 +139,233 @@ class HeadTrainerControllerTests {
     }
 
     @Test
-    void simulationChecksInitialParticipantsRanksAndCopiesMarkedRows() throws Exception {
-        String linkedSchedule = createSchedule(horse, null, "2026-10-03", "06:00", "07:00");
-        setNow(Instant.parse("2026-10-02T23:30:00Z"), LocalDate.of(2026, 10, 3));
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("horse_ids", List.of(horse, otherHorse));
-        request.put("distance_meters", 1200);
-        request.put("duration_seconds", 180);
-        request.put("training_schedule_id", linkedSchedule);
-        JsonNode started = result(call(body(post("/api/head-trainer/race-simulations"), request))
-                .andExpect(status().isCreated()).andExpect(jsonPath("$.horses.length()").value(2)));
-        String simulationId = started.get("simulation_id").asText();
-        call(body(post("/api/head-trainer/race-simulations/" + simulationId + "/finish"),
-                Map.of("results", List.of(result(horse, 82.4), result(otherHorse, 85.1)))))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.ranking[0].rank").value(1));
-        assertThat(db.queryForObject("SELECT count(*) FROM race_simulation_metrics WHERE simulation_id=?", Long.class, simulationId)).isEqualTo(2);
-        assertThat(db.queryForObject("SELECT count(*) FROM training_metrics_logs WHERE is_simulated=TRUE", Long.class)).isZero();
+    void simulationFollowsTargetsRejectsEarlyFinishAndIgnoresBrowserResults() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        JsonNode started=start(scheduleId,horse,"Normal");
+        String id=started.get("simulation_id").asText();
+        int duration=started.get("duration_seconds").asInt();
+        assertThat(duration).isBetween(60,3600).isLessThan(3600);
+        assertThat(start(scheduleId,horse,"Normal").get("simulation_id").asText()).isEqualTo(id);
+        call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of()))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("SESSION_NOT_FINISHED"));
+        setNow(Instant.parse("2026-10-03T00:00:00Z"),LocalDate.of(2026,10,3));
+        call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of("results",List.of(Map.of("avg_speed_kmh",999)))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("Completed"));
+        JsonNode detail=result(call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk()));
+        assertThat(detail.get("actual_distance_meters").asDouble()).isCloseTo(1200,org.assertj.core.data.Offset.offset(0.5));
+        assertThat(detail.get("results").get(0).get("avg_speed_kmh").asDouble()).isGreaterThan(1.2);
+        assertThat(detail.get("readings").get(detail.get("readings").size()-1).get("elapsed_seconds").asInt()).isEqualTo(duration);
+        call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of())).andExpect(status().isOk());
+        assertThat(count("race_simulation_metrics")).isEqualTo(1);
+        assertThat(count("training_metrics_logs")).isEqualTo(1);
+        assertThat(count("races")).isZero(); assertThat(count("horse_race_entries")).isZero();
+        call(get("/api/horses/"+horse+"/training-metrics")).andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].is_simulated").value(true));
+        call(get("/api/horses/"+horse+"/training-metrics?include_simulated=false")).andExpect(jsonPath("$.length()").value(0));
     }
 
     @Test
-    void simulationValidatesFieldSizeResultCompletenessAndCopiesAsSimulated() throws Exception {
-        String tooSmall = "{\"horse_ids\":[\"" + horse + "\"],\"distance_meters\":1200,\"duration_seconds\":100}";
-        mvc.perform(post("/api/head-trainer/race-simulations").with(trainer()).contentType("application/json").content(tooSmall))
+    void simulationRequiresCorrectHorseScheduleTimeAndAssignedGroom() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        call(body(post("/api/head-trainer/race-simulations"),Map.of("horse_ids",List.of(horse))))
                 .andExpect(status().isBadRequest());
-        String tooMany = json.writeValueAsString(Map.of("horse_ids", List.of(horse, horse, horse, horse, horse, horse),
-                "distance_meters", 1200, "duration_seconds", 100));
-        mvc.perform(post("/api/head-trainer/race-simulations").with(trainer()).contentType("application/json").content(tooMany))
-                .andExpect(status().isBadRequest());
-        String scheduleId = createSchedule(horse, null, "2026-10-04", "06:00", "07:00");
-        setNow(Instant.parse("2026-10-03T23:30:00Z"), LocalDate.of(2026, 10, 4));
-        JsonNode started = result(call(body(post("/api/head-trainer/race-simulations"), Map.of(
-                "horse_ids", List.of(horse, otherHorse), "distance_meters", 1200, "duration_seconds", 100,
-                "training_schedule_id", scheduleId))).andExpect(status().isCreated()));
-        String simulationId = started.get("simulation_id").asText();
-        call(body(post("/api/head-trainer/race-simulations/" + simulationId + "/finish"),
-                Map.of("results", List.of(result(horse, 82.4)))))
-                .andExpect(status().isBadRequest());
-        call(body(post("/api/head-trainer/race-simulations/" + simulationId + "/finish"), Map.of(
-                "results", List.of(result(horse, 82.4), result(otherHorse, 85.1)), "copy_to_metrics", true)))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("Completed"));
-        assertThat(db.queryForObject("SELECT count(*) FROM training_metrics_logs WHERE is_simulated=TRUE", Long.class)).isEqualTo(2);
-        call(get("/api/horses/" + horse + "/training-metrics")).andExpect(jsonPath("$.length()").value(0));
-        call(get("/api/horses/" + horse + "/training-metrics?include_simulated=true"))
-                .andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].is_simulated").value(true));
+        call(body(post("/api/head-trainer/race-simulations"),request(scheduleId,horse,"Normal")))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("SESSION_OUTSIDE_TIME_WINDOW"));
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        call(body(post("/api/head-trainer/race-simulations"),request(scheduleId,otherHorse,"Normal"))).andExpect(status().isBadRequest());
+        call(body(post("/api/head-trainer/race-simulations"),Map.of("horse_ids",List.of(horse,otherHorse),"training_schedule_id",scheduleId))).andExpect(status().isBadRequest());
+        db.update("UPDATE training_schedules SET assigned_groom_id=NULL WHERE id=?",scheduleId);
+        call(body(post("/api/head-trainer/race-simulations"),request(scheduleId,horse,"Normal")))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("GROOM_NOT_ASSIGNED"));
+        assertThat(count("race_simulations")).isZero();
     }
+
+    @Test
+    void cancellationImmediatelySummarizesExactStopAndNeverCompletesSession() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        Instant began=Instant.parse("2026-10-02T23:00:00Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        JsonNode started=start(scheduleId,horse,"Normal");
+        String id=started.get("simulation_id").asText();
+        int interruptedAt=60;
+        setNow(began.plusSeconds(interruptedAt),LocalDate.of(2026,10,3));
+        call(body(patch("/api/training-schedules/"+scheduleId),Map.of("status","Cancelled"))).andExpect(status().isOk());
+        assertThat(count("training_metrics_logs")).isEqualTo(1); // No subsequent detail request is required.
+        JsonNode detail=result(call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk()));
+        assertThat(detail.get("status").asText()).isEqualTo("Interrupted");
+        assertThat(detail.get("actual_distance_meters").asDouble()).isGreaterThan(0).isLessThan(1200);
+        assertThat(detail.get("stamina_score").isNull()).isTrue();
+        assertThat(detail.get("recovery_heart_rate").isNull()).isTrue();
+        JsonNode readings=detail.get("readings");
+        assertThat(readings.get(readings.size()-1).get("elapsed_seconds").asInt()).isEqualTo(interruptedAt);
+        int readingsCount=readings.size();
+        setNow(began.plusSeconds(4000),LocalDate.of(2026,10,3));
+        call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("Interrupted")).andExpect(jsonPath("$.ranking.length()").value(0));
+        call(get("/api/head-trainer/race-simulations/"+id)).andExpect(jsonPath("$.readings.length()").value(readingsCount));
+        assertThat(count("training_metrics_logs")).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,scheduleId)).isEqualTo("Cancelled");
+        call(get("/api/horses/"+horse+"/training-analysis?from=2026-10-03&to=2026-10-03"))
+                .andExpect(jsonPath("$.sessions[0].recommendation").value("REVIEW_INTERRUPTION"))
+                .andExpect(jsonPath("$.sessions[0].max_heart_rate").isNumber());
+    }
+
+    @Test
+    void liveAlertsAreDeduplicatedAndMedicalLockSavesPartialResults() throws Exception {
+        String planId=createPlan(horse,"High load");
+        call(body(patch("/api/training-plans/"+planId),Map.of("target_distance_meters",50000,"target_intensity","High","target_track_surface","Synthetic"))).andExpect(status().isOk());
+        String scheduleId=createSchedule(horse,planId,"2026-10-03","06:00","07:00");
+        Instant began=Instant.parse("2026-10-02T23:00:00Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        String id=start(scheduleId,horse,"Fatigue").get("simulation_id").asText();
+        setNow(began.plusSeconds(2201),LocalDate.of(2026,10,3));
+        call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk());
+        assertThat(db.queryForObject("SELECT count(*) FROM notifications WHERE related_table='Race_Simulations' AND related_id=?",Long.class,id)).isEqualTo(1);
+        call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk());
+        mvc.perform(body(put("/api/horses/"+horse+"/training-lock"),Map.of("lock_level","Critical","lock_reason","Stop training"))
+                .with(user("vet@test.com").roles("VETERINARIAN"))).andExpect(status().isOk());
+        assertThat(db.queryForObject("SELECT count(*) FROM notifications WHERE related_table='Race_Simulations' AND related_id=?",Long.class,id)).isEqualTo(1);
+        assertThat(count("training_metrics_logs")).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,scheduleId)).isEqualTo("Blocked");
+        assertThat(db.queryForObject("SELECT status FROM race_simulations WHERE id=?",String.class,id)).isEqualTo("Interrupted");
+        assertThat(db.queryForObject("SELECT has_injury_alert FROM training_metrics_logs",Boolean.class)).isTrue();
+        assertThat(db.queryForObject("SELECT stamina_score FROM training_metrics_logs",Double.class)).isNull();
+    }
+
+    @Test
+    void groupStartsSeparateLinkedSessionsAndRestoresAllRunningHorses() throws Exception {
+        String first=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        String second=createSchedule(otherHorse,null,"2026-10-03","06:00","07:00");
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        var input=Map.of("sessions",List.of(request(first,horse,"Normal"),request(second,otherHorse,"Normal")));
+        call(body(post("/api/head-trainer/race-simulations/group"),input)).andExpect(status().isCreated()).andExpect(jsonPath("$.data.length()").value(2));
+        call(body(post("/api/head-trainer/race-simulations/group"),input)).andExpect(status().isCreated());
+        assertThat(count("race_simulations")).isEqualTo(2);
+        call(get("/api/head-trainer/race-simulations/active-sessions")).andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(2));
+        setNow(Instant.parse("2026-10-03T00:00:00Z"),LocalDate.of(2026,10,3));
+        call(get("/api/head-trainer/race-simulations/active-sessions")).andExpect(jsonPath("$.data.length()").value(0));
+        assertThat(count("training_metrics_logs")).isEqualTo(2);
+        assertThat(db.queryForObject("SELECT count(*) FROM training_metrics_logs m JOIN training_schedules ts ON ts.id=m.training_schedule_id WHERE m.horse_id=ts.horse_id",Long.class)).isEqualTo(2);
+    }
+
+    @Test
+    void invalidGroupRollsBackEveryStartAndDuplicateHorseIsRejected() throws Exception {
+        if (horse.compareTo(otherHorse)>0) { String swap=horse; horse=otherHorse; otherHorse=swap; }
+        String first=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        String second=createSchedule(otherHorse,null,"2026-10-03","08:00","09:00");
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        call(body(post("/api/head-trainer/race-simulations/group"),Map.of("sessions",List.of(request(first,horse,"Normal"),request(second,otherHorse,"Normal")))))
+                .andExpect(status().isConflict());
+        assertThat(count("race_simulations")).isZero();
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,first)).isEqualTo("Scheduled");
+        call(body(post("/api/head-trainer/race-simulations/group"),Map.of("sessions",List.of(request(first,horse,"Normal"),request(first,horse,"Normal")))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void resumeReadingsAreStableAndIncludeNonCadenceFinalSample() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        Instant began=Instant.parse("2026-10-02T23:00:01Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        JsonNode started=start(scheduleId,horse,"Normal");
+        String id=started.get("simulation_id").asText();
+        int duration=started.get("duration_seconds").asInt();
+        setNow(began.plusSeconds(duration-1L),LocalDate.of(2026,10,3));
+        JsonNode first=result(call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk())).get("readings");
+        JsonNode repeat=result(call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk())).get("readings");
+        assertThat(repeat).isEqualTo(first);
+        call(get("/api/head-trainer/race-simulations/active")).andExpect(jsonPath("$.simulation_id").value(id));
+        setNow(began.plusSeconds(duration),LocalDate.of(2026,10,3));
+        JsonNode finalState=result(call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk()));
+        JsonNode readings=finalState.get("readings");
+        assertThat(readings.get(readings.size()-1).get("elapsed_seconds").asInt()).isEqualTo(duration);
+        assertThat(finalState.get("actual_distance_meters").asDouble()).isCloseTo(1200,org.assertj.core.data.Offset.offset(0.5));
+    }
+
+    @Test
+    void concurrentStartAndFinishPersistExactlyOneSessionAndSummary() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","06:01");
+        Instant began=Instant.parse("2026-10-02T23:00:00Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        try (var pool=Executors.newFixedThreadPool(2)) {
+            var first=pool.submit(() -> start(scheduleId,horse,"Normal").get("simulation_id").asText());
+            var second=pool.submit(() -> start(scheduleId,horse,"Normal").get("simulation_id").asText());
+            String id=first.get(15,TimeUnit.SECONDS);
+            assertThat(second.get(15,TimeUnit.SECONDS)).isEqualTo(id);
+            setNow(began.plusSeconds(60),LocalDate.of(2026,10,3));
+            var one=pool.submit(() -> call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of())).andExpect(status().isOk()));
+            var two=pool.submit(() -> call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of())).andExpect(status().isOk()));
+            one.get(15,TimeUnit.SECONDS); two.get(15,TimeUnit.SECONDS);
+        }
+        assertThat(count("race_simulations")).isEqualTo(1);
+        assertThat(count("race_simulation_metrics")).isEqualTo(1);
+        assertThat(count("training_metrics_logs")).isEqualTo(1);
+    }
+
+    @Test
+    void cancellationBackfillsAlertsWithoutBrowserPolling() throws Exception {
+        String planId=createPlan(horse,"High load");
+        call(body(patch("/api/training-plans/"+planId),Map.of("target_distance_meters",50000,"target_intensity","High","target_track_surface","Synthetic"))).andExpect(status().isOk());
+        String scheduleId=createSchedule(horse,planId,"2026-10-03","06:00","07:00");
+        Instant began=Instant.parse("2026-10-02T23:00:00Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        String id=start(scheduleId,horse,"Fatigue").get("simulation_id").asText();
+        setNow(began.plusSeconds(2201),LocalDate.of(2026,10,3));
+        call(body(patch("/api/training-schedules/"+scheduleId),Map.of("status","Cancelled"))).andExpect(status().isOk());
+        assertThat(db.queryForObject("SELECT count(*) FROM notifications WHERE related_table='Race_Simulations' AND related_id=?",Long.class,id)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT max_heart_rate FROM training_metrics_logs",Integer.class)).isGreaterThan(220);
+    }
+
+    @Test
+    void maintenanceFinishesWithoutAnActiveCreatorAndRepairsInterruptedHistory() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        Instant began=Instant.parse("2026-10-02T23:00:00Z");
+        setNow(began,LocalDate.of(2026,10,3));
+        String id=start(scheduleId,horse,"Normal").get("simulation_id").asText();
+        db.update("UPDATE users SET must_change_password=TRUE WHERE email=?",HEAD);
+        setNow(began.plusSeconds(3600),LocalDate.of(2026,10,3));
+        assertThat(simulations.advance(UUID.fromString(id)).get("status")).isEqualTo("Completed");
+        assertThat(count("training_metrics_logs")).isEqualTo(1);
+        db.update("UPDATE users SET must_change_password=FALSE WHERE email=?",HEAD);
+        String next=createSchedule(horse,null,"2026-10-04","06:00","07:00");
+        setNow(began.plusSeconds(86400),LocalDate.of(2026,10,4));
+        String interrupted=start(next,horse,"Normal").get("simulation_id").asText();
+        db.update("UPDATE race_simulations SET status='Interrupted',stop_reason='Historical cancellation',stopped_at=? WHERE id=?",
+                LocalDateTime.ofInstant(began.plusSeconds(86417),ZoneOffset.UTC),interrupted);
+        var repaired=simulations.advance(UUID.fromString(interrupted));
+        assertThat(repaired.get("actual_distance_meters")).isNotNull();
+        assertThat(repaired.get("stamina_score")).isNull();
+        simulations.advance(UUID.fromString(interrupted));
+        assertThat(count("training_metrics_logs")).isEqualTo(2);
+    }
+
+    @Test
+    void expiredUnstartedSessionsBecomeMissedAndRestNeverGeneratesExercise() throws Exception {
+        String missed=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        var restInput=schedule(null,"2026-10-03","06:00","07:00");
+        restInput.put("session_type","Rest");
+        String rest=result(call(body(post("/api/horses/"+otherHorse+"/training-schedules"),restInput)).andExpect(status().isCreated())).get("id").asText();
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        call(body(post("/api/head-trainer/race-simulations"),request(rest,otherHorse,"Normal")))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("SCHEDULE_NOT_STARTABLE"));
+        db.update("UPDATE users SET must_change_password=TRUE WHERE email=?",HEAD);
+        setNow(Instant.parse("2026-10-03T00:00:00Z"),LocalDate.of(2026,10,3));
+        new TrainingSessionMaintenance(db,simulations,time).tick();
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,missed)).isEqualTo("Missed");
+        assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,rest)).isEqualTo("Scheduled");
+        db.update("UPDATE users SET must_change_password=FALSE WHERE email=?",HEAD);
+        call(body(patch("/api/training-schedules/"+rest),Map.of("status","Completed"))).andExpect(status().isOk());
+        assertThat(count("race_simulations")).isZero();
+        assertThat(count("training_metrics_logs")).isZero();
+    }
+
+    private Map<String,Object> request(String scheduleId,String horseId,String scenario) {
+        return Map.of("training_schedule_id",scheduleId,"horse_ids",List.of(horseId),"scenario",scenario);
+    }
+    private JsonNode start(String scheduleId,String horseId,String scenario) throws Exception {
+        return result(call(body(post("/api/head-trainer/race-simulations"),request(scheduleId,horseId,scenario))).andExpect(status().isCreated()));
+    }
+    private long count(String table) { return db.queryForObject("SELECT count(*) FROM "+table,Long.class); }
 
     private String createPlan(String horseId, String stage) throws Exception {
         return result(call(body(post("/api/horses/" + horseId + "/training-plans"), plan(stage)))
@@ -188,7 +373,13 @@ class HeadTrainerControllerTests {
     }
 
     private String createSchedule(String horseId, String planId, String date, String start, String end) throws Exception {
-        return result(call(body(post("/api/horses/" + horseId + "/training-schedules"), schedule(planId, date, start, end)))
+        if (planId == null) {
+            var existing=db.queryForList("SELECT id FROM training_plans WHERE horse_id=?",String.class,horseId);
+            planId=existing.isEmpty() ? createPlan(horseId,"Foundation") : existing.getFirst();
+        }
+        var payload=schedule(planId,date,start,end);
+        payload.put("assigned_groom_id",uid(horseId.equals(horse) ? "groom@test.com" : "groom2@test.com"));
+        return result(call(body(post("/api/horses/" + horseId + "/training-schedules"), payload))
                 .andExpect(status().isCreated())).get("id").asText();
     }
 
@@ -196,6 +387,7 @@ class HeadTrainerControllerTests {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("stage_name", stage); value.put("start_date", "2026-09-28"); value.put("end_date", "2026-10-31");
         value.put("objective", "Improve endurance"); value.put("target_distance_meters", 1200);
+        value.put("target_workload_minutes",180); value.put("target_track_surface","Dirt");
         value.put("target_intensity", "Medium"); value.put("update_deadline_hours", 24);
         return value;
     }
@@ -210,11 +402,6 @@ class HeadTrainerControllerTests {
     private Map<String, Object> metric(int heartRate) {
         return Map.of("body_weight_kg", 452.0, "max_heart_rate", heartRate, "avg_speed_kmh", 45.2,
                 "stamina_score", 7.5, "trainer_review", "Strong finish");
-    }
-
-    private Map<String, Object> result(String horseId, double finishTime) {
-        return Map.of("horse_id", horseId, "finish_time_seconds", finishTime, "avg_speed_kmh", 52.4,
-                "max_heart_rate", 188, "max_bp_systolic", 168, "max_bp_diastolic", 92);
     }
 
     private void addUser(String email, String role) {

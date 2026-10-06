@@ -3,6 +3,7 @@ package com.example.springbootbackend.veterinarian.horse;
 import com.example.springbootbackend.veterinarian.support.*;
 import com.example.springbootbackend.veterinarian.notification.NotificationService;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.example.springbootbackend.headtrainer.TrainingSimulationRecorder;
 import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,8 +16,9 @@ public class VetHorseService {
     private final VetAudit audit;
     private final VetTime time;
     private final NotificationService notifications;
-    public VetHorseService(VetData data,VetAccess access,VetAudit audit,VetTime time,NotificationService notifications) {
-        this.data=data; this.access=access; this.audit=audit; this.time=time; this.notifications=notifications;
+    private final TrainingSimulationRecorder simulationRecorder;
+    public VetHorseService(VetData data,VetAccess access,VetAudit audit,VetTime time,NotificationService notifications,TrainingSimulationRecorder simulationRecorder) {
+        this.data=data; this.access=access; this.audit=audit; this.time=time; this.notifications=notifications; this.simulationRecorder=simulationRecorder;
     }
     public Map<String,Object> overview(String email,String section) {
         access.requireRole(email, "VETERINARIAN");
@@ -228,13 +230,14 @@ public class VetHorseService {
                 (row,index)->row.getLong("user_id"),(Object[])roles);
     }
     private void blockUpcomingSessions(String horse) {
+        simulationRecorder.interruptHorse(horse,"Horse training locked");
         data.db.update("UPDATE training_schedules ts SET status='Blocked' FROM calendar_events ce "
-                +"WHERE ce.id=ts.calendar_event_id AND ts.horse_id=? AND ts.status='Scheduled' "
-                +"AND ce.status='Scheduled' AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
+                +"WHERE ce.id=ts.calendar_event_id AND ts.horse_id=? AND ts.status IN ('Scheduled','InProgress') "
+                +"AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
                 horse,time.today());
         data.db.update("UPDATE calendar_events ce SET status='Blocked' FROM training_schedules ts "
                 +"WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Blocked' "
-                +"AND ce.status='Scheduled' AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
+                +"AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
                 horse,time.today());
     }
 }

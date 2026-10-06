@@ -3,6 +3,7 @@ package com.example.springbootbackend.headtrainer;
 import com.example.springbootbackend.veterinarian.support.*;
 import com.example.springbootbackend.veterinarian.horse.HorseTrainingGuard;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.*;
@@ -13,7 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Runs a race and records its results across the training and competition history. */
+/** Scheduled training with a deterministic sensor substitute. */
 @Service
 @Transactional(readOnly = true)
 public class RaceSimulationService {
@@ -24,13 +25,14 @@ public class RaceSimulationService {
     private final HorseTrainingGuard trainingGuard;
     private final int injuryAlertHeartRate;
     private final BigDecimal injuryAlertSpeed;
+    private final TrainingSimulationRecorder recorder;
 
     public RaceSimulationService(JdbcTemplate db, VetAccess access, VetAudit audit, VetTime time,
-            HorseTrainingGuard trainingGuard,
+            HorseTrainingGuard trainingGuard, TrainingSimulationRecorder recorder,
             @Value("${app.head-trainer.injury-alert-heart-rate:220}") int injuryAlertHeartRate,
-            @Value("${app.head-trainer.injury-alert-speed-kmh:60}") BigDecimal injuryAlertSpeed) {
+            @Value("${app.head-trainer.injury-alert-speed-kmh:74}") BigDecimal injuryAlertSpeed) {
         this.db = db; this.access = access; this.audit = audit; this.time = time;
-        this.trainingGuard = trainingGuard;
+        this.trainingGuard = trainingGuard; this.recorder = recorder;
         this.injuryAlertHeartRate = injuryAlertHeartRate;
         this.injuryAlertSpeed = injuryAlertSpeed;
     }
@@ -39,322 +41,264 @@ public class RaceSimulationService {
     public Map<String, Object> create(String email, String ip, JsonNode body) {
         long actor = access.requireRole(email, "HEAD_TRAINER");
         Map<String, Object> fields = VetInput.parse(body,
-                "distance_meters:int", "duration_seconds:int", "training_schedule_id:uuid");
-        VetInput.required(fields, "distance_meters", "duration_seconds");
-        int distance = ((Number) fields.get("distance_meters")).intValue();
-        int duration = ((Number) fields.get("duration_seconds")).intValue();
-        if (distance < 400 || distance > 3200) throw VetException.invalid("distance_meters", "Khoang hop le: 400 den 3200");
-        if (duration < 60 || duration > 300) throw VetException.invalid("duration_seconds", "Khoang hop le: 60 den 300");
+                "training_schedule_id:uuid", "scenario:20");
+        VetInput.required(fields, "training_schedule_id");
+        fields.putIfAbsent("scenario","Normal");
+        VetInput.choice(fields,"scenario","Normal","Fatigue");
         List<String> horseIds = horseIds(body == null ? null : body.get("horse_ids"));
-        for (String horseId : horseIds.stream().sorted().toList()) trainingGuard.assertHorseNotLocked(horseId);
-        String scheduleId = fields.get("training_schedule_id") == null ? null : fields.get("training_schedule_id").toString();
-        if (scheduleId != null) {
-            var scheduleRows = db.query("SELECT ts.horse_id,ts.status,ts.session_type,ce.event_date,ce.start_time,ce.end_time"
-                    + " FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id"
-                    + " WHERE ts.id=? FOR UPDATE OF ts", VetRows.MAPPER, scheduleId);
-            if (scheduleRows.isEmpty()) throw new VetException(404, "SCHEDULE_NOT_FOUND", "Khong tim thay buoi tap");
-            var schedule = scheduleRows.getFirst();
-            if (!horseIds.contains(schedule.get("horse_id").toString()))
-                throw VetException.invalid("training_schedule_id", "Buoi tap phai thuoc mot ngua tham gia cuoc dua");
-            if (!"Scheduled".equals(schedule.get("status")) || "Rest".equals(schedule.get("session_type")))
-                throw new VetException(409, "SCHEDULE_NOT_STARTABLE", "Chi lien ket buoi tap dang duoc len lich");
-            LocalDate date = (LocalDate) schedule.get("event_date");
-            LocalTime start = (LocalTime) schedule.get("start_time"), end = (LocalTime) schedule.get("end_time");
-            LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
-            if (start == null || end == null || !date.equals(now.toLocalDate())
-                    || now.isBefore(LocalDateTime.of(date, start)) || !now.isBefore(LocalDateTime.of(date, end)))
-                throw new VetException(409, "SESSION_OUTSIDE_TIME_WINDOW", "Chi chay cuoc dua trong khung gio cua buoi tap da dat");
+        String scheduleId = fields.get("training_schedule_id").toString();
+        trainingGuard.assertHorseNotLocked(horseIds.getFirst());
+        var scheduleRows = db.query("SELECT ts.horse_id,ts.status,ts.session_type,ce.event_date,ce.start_time,ce.end_time,"
+                + "ts.target_distance_meters,ts.target_intensity,ts.track_surface,ts.assigned_groom_id FROM training_schedules ts"
+                + " JOIN calendar_events ce ON ce.id=ts.calendar_event_id"
+                + " LEFT JOIN training_plans p ON p.id=ts.training_plan_id WHERE ts.id=? FOR UPDATE OF ts",
+                VetRows.MAPPER, scheduleId);
+        if (scheduleRows.isEmpty()) throw new VetException(404, "SCHEDULE_NOT_FOUND", "Khong tim thay buoi tap");
+        var schedule = scheduleRows.getFirst();
+        if (!List.of("Scheduled", "InProgress").contains(schedule.get("status")) || "Rest".equals(schedule.get("session_type")))
+            throw new VetException(409, "SCHEDULE_NOT_STARTABLE", "Buoi tap khong the bat dau");
+        if (schedule.get("assigned_groom_id") == null)
+            throw new VetException(409,"GROOM_NOT_ASSIGNED","Phai phan cong Groom truoc khi mo gia lap");
+        if (db.query("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=?"
+                + " AND r.role_name='GROOM' AND u.status='APPROVED' AND u.deleted_at IS NULL AND u.must_change_password=FALSE",VetRows.MAPPER,schedule.get("assigned_groom_id")).isEmpty())
+            throw new VetException(409,"GROOM_UNAVAILABLE","Groom duoc phan cong khong con du dieu kien");
+        if (schedule.get("target_distance_meters") == null || schedule.get("target_intensity") == null || schedule.get("track_surface") == null)
+            throw new VetException(409,"SESSION_TARGETS_MISSING","Can bo sung muc tieu va mat san truoc khi tap");
+        if (!horseIds.getFirst().equals(schedule.get("horse_id")))
+            throw VetException.invalid("horse_ids", "Gia lap phai dung ngua cua lich tap");
+        var running = db.query("SELECT rs.id FROM race_simulations rs JOIN race_simulation_horses sh ON sh.simulation_id=rs.id"
+                + " WHERE sh.horse_id=? AND rs.status='Running'", VetRows.MAPPER, horseIds.getFirst());
+        if (!running.isEmpty()) {
+            var existing = detail(email, UUID.fromString(running.getFirst().get("id").toString()));
+            if ("Running".equals(existing.get("status"))) {
+                if (!scheduleId.equals(existing.get("training_schedule_id")))
+                    throw new VetException(409, "HORSE_ALREADY_TRAINING", "Hay ket thuc buoi gia lap dang chay cua ngua truoc");
+                return existing;
+            }
         }
+        LocalDate date = (LocalDate) schedule.get("event_date");
+        LocalTime start = (LocalTime) schedule.get("start_time"), end = (LocalTime) schedule.get("end_time");
+        LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
+        if (start == null || end == null || now.isBefore(LocalDateTime.of(date, start)) || !now.isBefore(LocalDateTime.of(date, end)))
+            throw new VetException(409, "SESSION_OUTSIDE_TIME_WINDOW", "Chi mo gia lap trong khung gio buoi tap");
+        int availableSeconds = (int) Math.max(1, (Duration.between(time.now(), LocalDateTime.of(date, end).atZone(VetTime.BUSINESS_ZONE).toInstant()).toMillis() + 999) / 1000);
+        int distance = ((Number) schedule.get("target_distance_meters")).intValue();
+        String intensity = Objects.toString(schedule.get("target_intensity"), "Medium");
+        String surface = schedule.get("track_surface").toString();
 
-        var horses = db.query("SELECT id,horse_name,image_url,breed FROM horses WHERE deleted_at IS NULL AND id IN ("
+        var horses = db.query("SELECT id,horse_name,image_url,breed,current_weight_kg FROM horses WHERE deleted_at IS NULL AND id IN ("
                         + String.join(",", Collections.nCopies(horseIds.size(), "?")) + ")",
                 VetRows.MAPPER, horseIds.toArray());
         if (horses.size() != horseIds.size()) throw new VetException(404, "HORSE_NOT_FOUND", "Khong tim thay ngua");
-        Map<String, Map<String, Object>> byId = new HashMap<>();
-        for (var horse : horses) byId.put(horse.get("id").toString(), horse);
+
+        String horseId = horseIds.getFirst();
+        int seed = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
+        double stamina = averageRecentStamina(horseId);
+        double capacity = RaceSimulationFormula.capacity(intensity, surface, stamina);
+        int duration = RaceSimulationFormula.durationForDistance(distance, availableSeconds, seed, capacity);
+        double maxSpeed = RaceSimulationFormula.baseSpeed(distance, duration, seed, capacity);
+        maxSpeed = BigDecimal.valueOf(maxSpeed).setScale(4, RoundingMode.HALF_UP).doubleValue();
 
         String simulationId = UUID.randomUUID().toString();
-        db.update("INSERT INTO race_simulations(id,distance_meters,duration_seconds,training_schedule_id,status,created_by,created_at)"
-                        + " VALUES (?,?,?,?,'Running',?,?)",
-                simulationId, distance, duration, scheduleId, actor, time.utcNow());
+        db.update("INSERT INTO race_simulations(id,distance_meters,duration_seconds,training_schedule_id,status,created_by,created_at,target_intensity,track_surface,model_version,scenario)"
+                        + " VALUES (?,?,?,?,'Running',?,?,?,?,5,?)",
+                simulationId, distance, duration, scheduleId, actor, time.utcNow(), intensity,surface,fields.get("scenario"));
         if (scheduleId != null) {
             db.update("UPDATE training_schedules SET status='InProgress' WHERE id=?", scheduleId);
             db.update("UPDATE calendar_events SET status='InProgress' WHERE source_table='training_schedules' AND source_id=?", scheduleId);
         }
-        List<Map<String, Object>> responseHorses = new ArrayList<>();
-        for (int index = 0; index < horseIds.size(); index++) {
-            String horseId = horseIds.get(index);
-            Map<String, Object> horse = byId.get(horseId);
-            int seed = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
-            double stamina = averageRecentStamina(horseId);
-            double maxSpeed = clamp(45 + stamina * 2 + ThreadLocalRandom.current().nextDouble(-3, 3), 35, 65);
-            maxSpeed = BigDecimal.valueOf(maxSpeed).setScale(1, RoundingMode.HALF_UP).doubleValue();
-            int restingHeartRate = 34;
-            int restingSystolic = 110;
-            int restingDiastolic = 70;
-            int lane = index + 1;
-            db.update("INSERT INTO race_simulation_horses(simulation_id,horse_id,lane,seed,base_max_speed_kmh,"
-                            + "base_resting_heart_rate,base_bp_systolic,base_bp_diastolic,baseline_stamina_score)"
-                            + " VALUES (?,?,?,?,?,?,?,?,?)",
-                    simulationId, horseId, lane, seed, maxSpeed, restingHeartRate, restingSystolic, restingDiastolic, stamina);
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("horse_id", horseId);
-            item.put("horse_name", horse.get("horse_name"));
-            item.put("image_url", horse.get("image_url"));
-            item.put("lane", lane);
-            item.put("seed", seed);
-            item.put("base_max_speed_kmh", maxSpeed);
-            item.put("base_resting_heart_rate", restingHeartRate);
-            item.put("base_resting_bp", Map.of("systolic", restingSystolic, "diastolic", restingDiastolic));
-            item.put("variance_profile", "normal");
-            responseHorses.add(item);
-        }
+        db.update("INSERT INTO race_simulation_horses(simulation_id,horse_id,lane,seed,base_max_speed_kmh,"
+                        + "base_resting_heart_rate,base_bp_systolic,base_bp_diastolic,baseline_stamina_score,body_weight_kg)"
+                        + " VALUES (?,?,1,?,?,?,?,?,?,?)",
+                simulationId, horseId, seed, maxSpeed, 34, 110, 70, stamina, horses.getFirst().get("current_weight_kg"));
         audit.record(actor, ip, "CREATE_RACE_SIMULATION:" + simulationId);
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("simulation_id", simulationId);
-        response.put("distance_meters", distance);
-        response.put("duration_seconds", duration);
-        response.put("training_schedule_id", scheduleId);
-        response.put("injury_alert_heart_rate", injuryAlertHeartRate);
-        response.put("injury_alert_speed_kmh", injuryAlertSpeed);
-        response.put("status", "Running");
-        response.put("horses", responseHorses);
-        return response;
+        return detail(email, UUID.fromString(simulationId));
+    }
+
+    @Transactional
+    public Map<String,Object> restartWithCurrentSpeedModel(String email, String ip, UUID simulationId) {
+        long actor = access.requireRole(email,"HEAD_TRAINER");
+        var session = lockedSession(simulationId.toString());
+        reconcile(session);
+        if (!"Running".equals(session.get("status")))
+            throw new VetException(409,"SESSION_NOT_RUNNING","Chi co the chay lai buoi tap dang chay");
+        if (((Number)session.get("model_version")).intValue() >= 5)
+            throw new VetException(409,"SESSION_MODEL_CURRENT","Buoi tap da dung cong thuc toc do moi");
+        String scheduleId = Objects.toString(session.get("training_schedule_id"),null);
+        if (scheduleId == null)
+            throw new VetException(409,"SCHEDULE_NOT_FOUND","Phien tap khong gan voi lich tap");
+        var horses = db.query("SELECT horse_id FROM race_simulation_horses WHERE simulation_id=? ORDER BY lane",VetRows.MAPPER,simulationId.toString());
+        if (horses.size()!=1)
+            throw new VetException(409,"SESSION_HORSE_INVALID","Phien tap khong co dung mot ngua");
+
+        int elapsed = recorder.elapsed(session);
+        recorder.capture(session,elapsed,false);
+        Instant stopped = time.now();
+        String reason = "Restarted with updated racehorse speed model";
+        db.update("UPDATE race_simulations SET status='Interrupted',stop_reason=?,stopped_at=? WHERE id=?",
+                reason,VetRows.sqlValue(stopped),simulationId.toString());
+        session.put("status","Interrupted"); session.put("stop_reason",reason); session.put("stopped_at",stopped);
+        recorder.summarize(session,elapsed);
+        audit.record(actor,ip,"RESTART_LEGACY_TRAINING_SIMULATION:"+simulationId);
+
+        var replacement = JsonNodeFactory.instance.objectNode()
+                .put("training_schedule_id",scheduleId)
+                .put("scenario",Objects.toString(session.get("scenario"),"Normal"));
+        replacement.putArray("horse_ids").add(horses.getFirst().get("horse_id").toString());
+        return create(email,ip,replacement);
     }
 
     @Transactional
     public Map<String, Object> finish(String email, String ip, UUID simulationId, JsonNode body) {
         long actor = access.requireRole(email, "HEAD_TRAINER");
-        String id = simulationId.toString();
-        var simulationRows = db.query("SELECT * FROM race_simulations WHERE id=? FOR UPDATE", VetRows.MAPPER, id);
-        if (simulationRows.isEmpty()) throw new VetException(404, "RACE_NOT_FOUND", "Khong tim thay cuoc dua");
-        var simulation = simulationRows.getFirst();
-        if ("Completed".equals(simulation.get("status")) && simulation.get("race_id") != null)
-            return completedResponse(id, simulation.get("race_id").toString());
-        if (!"Running".equals(simulation.get("status")))
-            throw new VetException(409, "SIMULATION_NOT_RUNNING", "Cuoc dua da ket thuc hoac bi huy");
-        int distance = ((Number) simulation.get("distance_meters")).intValue();
-        Map<String, Object> finishFields = VetInput.parse(body, "copy_to_metrics:bool");
-        List<Map<String, Object>> participants = db.query("SELECT sh.*,h.horse_name FROM race_simulation_horses sh"
-                + " JOIN horses h ON h.id=sh.horse_id WHERE sh.simulation_id=? ORDER BY sh.lane", VetRows.MAPPER, id);
-        Map<String, Map<String, Object>> laneByHorse = new HashMap<>();
-        for (var horse : participants) laneByHorse.put(horse.get("horse_id").toString(), horse);
-        List<Map<String, Object>> results = submittedResults(body == null ? null : body.get("results"), participants);
+        var session = lockedSession(simulationId.toString());
+        reconcile(session);
+        if ("Running".equals(session.get("status")))
+            throw new VetException(409, "SESSION_NOT_FINISHED", "Chua den gio ket thuc buoi tap");
+        audit.record(actor, ip, "FINISH_RACE_SIMULATION:" + simulationId);
+        var ranking = db.query("SELECT m.rank,m.horse_id,h.horse_name,m.finish_time_seconds"
+                + " FROM race_simulation_metrics m JOIN horses h ON h.id=m.horse_id"
+                + " WHERE m.simulation_id=? AND m.rank IS NOT NULL ORDER BY m.rank,m.lane", VetRows.MAPPER, simulationId.toString());
+        Map<String,Object> response = new LinkedHashMap<>();
+        response.put("simulation_id",simulationId.toString()); response.put("race_id",null);
+        response.put("race_name","Training session"); response.put("status",session.get("status"));
+        response.put("ranking",ranking);
+        return response;
+    }
 
-        results.sort(Comparator.comparing((Map<String, Object> row) -> (BigDecimal) row.get("finish_time_seconds"))
-                .thenComparing(row -> ((Number) row.get("lane")).intValue()));
-        boolean copyToMetrics = Boolean.TRUE.equals(finishFields.get("copy_to_metrics"));
-        LocalDateTime resultTime = time.utcNow();
-        String linkedScheduleId = simulation.get("training_schedule_id") == null
-                ? null : simulation.get("training_schedule_id").toString();
-        String linkedScheduleHorse = linkedScheduleId == null ? null : db.query(
-                "SELECT horse_id FROM training_schedules WHERE id=?", (rs, row) -> rs.getString(1), linkedScheduleId)
-                .stream().findFirst().orElse(null);
-        BigDecimal previousTime = null;
-        int previousRank = 0;
-        for (int index = 0; index < results.size(); index++) {
-            var result = results.get(index);
-            BigDecimal finishTime = (BigDecimal) result.get("finish_time_seconds");
-            int rank = previousTime != null && previousTime.compareTo(finishTime) == 0 ? previousRank : index + 1;
-            result.put("rank", rank);
-            previousRank = rank;
-            previousTime = finishTime;
-            String metricId = UUID.randomUUID().toString();
-            result.put("metric_id", metricId);
-            db.update("INSERT INTO race_simulation_metrics(id,simulation_id,horse_id,lane,finish_time_seconds,"
-                            + "avg_speed_kmh,max_heart_rate,max_bp_systolic,max_bp_diastolic,rank,created_at)"
-                            + " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    metricId, id, result.get("horse_id"), result.get("lane"), finishTime,
-                    result.get("avg_speed_kmh"), result.get("max_heart_rate"), result.get("max_bp_systolic"),
-                    result.get("max_bp_diastolic"), rank, resultTime);
-        }
-        for (var result : results) {
-            int heartRate = ((Number) result.get("max_heart_rate")).intValue();
-            boolean alert = heartRate > injuryAlertHeartRate
-                    || ((BigDecimal) result.get("avg_speed_kmh")).compareTo(injuryAlertSpeed) > 0;
-            result.put("has_injury_alert", alert);
-            db.update("UPDATE race_simulation_metrics SET has_injury_alert=? WHERE simulation_id=? AND horse_id=?",
-                    alert, id, result.get("horse_id"));
-            if (copyToMetrics) {
-                var participant = laneByHorse.get(result.get("horse_id").toString());
-                String metricScheduleId = Objects.equals(linkedScheduleHorse, result.get("horse_id"))
-                        ? linkedScheduleId : null;
-                db.update("INSERT INTO training_metrics_logs(id,horse_id,training_schedule_id,recorded_by,body_weight_kg,"
-                                + "max_heart_rate,avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,"
-                                + "bp_diastolic,is_simulated,recorded_at) VALUES (?,?,?,?,NULL,?,?,?,?,?,?,?,TRUE,?)",
-                        result.get("metric_id"),
-                        result.get("horse_id"), metricScheduleId, actor, result.get("max_heart_rate"),
-                        result.get("avg_speed_kmh"), participant.get("baseline_stamina_score"), alert,
-                        "Race simulation result", result.get("max_bp_systolic"), result.get("max_bp_diastolic"), resultTime);
+    // Use the same horse -> schedule -> simulation lock order as creation, cancellation and medical locks.
+    private Map<String,Object> lockedSession(String id) {
+        var owners = db.query("SELECT rs.training_schedule_id,sh.horse_id FROM race_simulations rs"
+                + " LEFT JOIN race_simulation_horses sh ON sh.simulation_id=rs.id WHERE rs.id=? ORDER BY sh.lane",VetRows.MAPPER,id);
+        if (owners.isEmpty()) throw new VetException(404,"SIMULATION_NOT_FOUND","Khong tim thay phien tap");
+        for (var owner : owners) if (owner.get("horse_id") != null) access.requireHorse(owner.get("horse_id").toString(),true);
+        if (owners.getFirst().get("training_schedule_id") != null)
+            db.query("SELECT id FROM training_schedules WHERE id=? FOR UPDATE",VetRows.MAPPER,owners.getFirst().get("training_schedule_id"));
+        return db.query("SELECT * FROM race_simulations WHERE id=? FOR UPDATE",VetRows.MAPPER,id).getFirst();
+    }
+
+    private void reconcile(Map<String,Object> session) {
+        String id = session.get("id").toString();
+        int version = ((Number)session.get("model_version")).intValue();
+        if ("Running".equals(session.get("status"))) {
+            var schedules = db.query("SELECT ts.status,h.is_training_locked,h.current_status FROM training_schedules ts"
+                    + " JOIN horses h ON h.id=ts.horse_id WHERE ts.id=?",VetRows.MAPPER,session.get("training_schedule_id"));
+            String reason = version < 2 ? "Legacy simulation replaced by scheduled training" : null;
+            if (reason == null && (schedules.isEmpty() || !"InProgress".equals(schedules.getFirst().get("status"))
+                    || Boolean.TRUE.equals(schedules.getFirst().get("is_training_locked"))
+                    || List.of("Injured","Quarantine").contains(schedules.getFirst().get("current_status"))))
+                reason = "Schedule closed or horse restricted";
+            if (reason != null) {
+                db.update("UPDATE race_simulations SET status='Interrupted',stop_reason=?,stopped_at=? WHERE id=?",reason,time.utcNow(),id);
+                session.put("status","Interrupted"); session.put("stop_reason",reason); session.put("stopped_at",time.now());
+            } else if (!time.now().isBefore(((Instant)session.get("created_at")).plusSeconds(((Number)session.get("duration_seconds")).intValue()))) {
+                Instant stopped = ((Instant)session.get("created_at")).plusSeconds(((Number)session.get("duration_seconds")).intValue());
+                db.update("UPDATE race_simulations SET status='Completed',stopped_at=? WHERE id=?",VetRows.sqlValue(stopped),id);
+                session.put("status","Completed"); session.put("stopped_at",stopped);
+                db.update("UPDATE training_schedules SET status='Completed' WHERE id=? AND status='InProgress'",session.get("training_schedule_id"));
+                db.update("UPDATE calendar_events SET status='Completed' WHERE source_table='training_schedules' AND source_id=? AND status='InProgress'",session.get("training_schedule_id"));
+                if (session.get("created_by") instanceof Number actor)
+                    audit.record(actor.longValue(),"server-reconciliation","FINALIZE_TRAINING_SIMULATION:"+id);
             }
         }
-        db.update("UPDATE race_simulations SET status='Completed' WHERE id=?", id);
-        if (simulation.get("training_schedule_id") != null) {
-            String scheduleId = simulation.get("training_schedule_id").toString();
-            db.update("UPDATE training_schedules SET status='Completed' WHERE id=? AND status='InProgress'", scheduleId);
-            db.update("UPDATE calendar_events SET status='Completed' WHERE source_table='training_schedules' AND source_id=? AND status='InProgress'", scheduleId);
+        if (version >= 2) {
+            int elapsed = recorder.elapsed(session);
+            if (List.of("Completed","Interrupted").contains(session.get("status"))) recorder.summarize(session,elapsed);
+            else recorder.capture(session,elapsed,false);
         }
-        LocalDate raceDate = time.today();
-        LocalTime raceTime = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE)
-                .toLocalTime().withSecond(0).withNano(0);
-        String raceId = UUID.randomUUID().toString();
-        String raceName = "Cuộc đua " + raceDate + " · " + id.substring(0, 8);
-        db.update("INSERT INTO races(id,race_name,distance_meters,race_date,description,is_simulated) VALUES (?,?,?,?,?,TRUE)",
-                raceId, raceName, distance, raceDate, "Kết quả cuộc đua được hệ thống ghi nhận.");
-        db.update("UPDATE race_simulations SET race_id=? WHERE id=?", raceId, id);
-        for (var result : results) {
-            String entryId = UUID.randomUUID().toString();
-            String eventId = UUID.randomUUID().toString();
-            db.update("INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,status,source_table,source_id,created_by,created_at)"
-                            + " VALUES (?,?, 'Race',?,?,?,'Completed','horse_race_entries',?,?,?)",
-                    eventId, result.get("horse_id"), raceName, raceDate, raceTime, entryId, actor, time.utcNow());
-            db.update("INSERT INTO horse_race_entries(id,calendar_event_id,horse_id,race_id,registered_by,result_position,prize_amount,status,created_at)"
-                            + " VALUES (?,?,?,?,?,?,0,'Completed',?)",
-                    entryId, eventId, result.get("horse_id"), raceId, actor, result.get("rank"), time.utcNow());
-        }
-        audit.record(actor, ip, "FINISH_RACE_SIMULATION:" + id);
-        List<Map<String, Object>> ranking = new ArrayList<>();
-        for (var result : results) {
-            var participant = laneByHorse.get(result.get("horse_id").toString());
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("rank", result.get("rank"));
-            item.put("horse_id", result.get("horse_id"));
-            item.put("horse_name", participant.get("horse_name"));
-            item.put("finish_time_seconds", result.get("finish_time_seconds"));
-            ranking.add(item);
-        }
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("simulation_id", id);
-        response.put("race_id", raceId);
-        response.put("race_name", raceName);
-        response.put("status", "Completed");
-        response.put("ranking", ranking);
-        return response;
     }
 
-    private Map<String, Object> completedResponse(String simulationId, String raceId) {
-        var races = db.query("SELECT race_name FROM races WHERE id=?", VetRows.MAPPER, raceId);
-        var ranking = db.query("SELECT m.rank,m.horse_id,h.horse_name,m.finish_time_seconds"
-                        + " FROM race_simulation_metrics m JOIN horses h ON h.id=m.horse_id"
-                        + " WHERE m.simulation_id=? ORDER BY m.rank,m.lane", VetRows.MAPPER, simulationId);
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("simulation_id", simulationId);
-        response.put("race_id", raceId);
-        response.put("race_name", races.isEmpty() ? "Cuộc đua" : races.getFirst().get("race_name"));
-        response.put("status", "Completed");
-        response.put("ranking", ranking);
-        return response;
+    @Transactional
+    public Map<String,Object> detail(String email, UUID simulationId) {
+        access.requireRole(email,"HEAD_TRAINER");
+        return advance(simulationId);
     }
 
-    private List<Map<String, Object>> submittedResults(JsonNode submitted, List<Map<String, Object>> participants) {
-        if (submitted == null || !submitted.isArray() || submitted.size() != participants.size())
-            throw VetException.invalid("results", "Phai gui dung mot ket qua cho moi ngua tham gia");
-        Map<String, Map<String, Object>> participantById = new HashMap<>();
-        for (var participant : participants) participantById.put(participant.get("horse_id").toString(), participant);
-        Set<String> seen = new HashSet<>();
-        List<Map<String, Object>> results = new ArrayList<>();
-        for (JsonNode input : submitted) {
-            Map<String, Object> fields = VetInput.parse(input, "horse_id:uuid", "finish_time_seconds:number",
-                    "avg_speed_kmh:number", "max_heart_rate:int", "max_bp_systolic:int", "max_bp_diastolic:int");
-            VetInput.required(fields, "horse_id", "finish_time_seconds", "avg_speed_kmh", "max_heart_rate",
-                    "max_bp_systolic", "max_bp_diastolic");
-            String horseId = fields.get("horse_id").toString();
-            Map<String, Object> participant = participantById.get(horseId);
-            if (participant == null || !seen.add(horseId))
-                throw VetException.invalid("results", "Ket qua phai co dung mot dong cho moi ngua tham gia");
-            VetInput.number(fields, "finish_time_seconds", "0.01", "9999.99", 2);
-            VetInput.number(fields, "avg_speed_kmh", "0.01", "90", 2);
-            int heartRate = ((Number) fields.get("max_heart_rate")).intValue();
-            int systolic = ((Number) fields.get("max_bp_systolic")).intValue();
-            int diastolic = ((Number) fields.get("max_bp_diastolic")).intValue();
-            if (heartRate < 20 || heartRate > 260) throw VetException.invalid("max_heart_rate", "Khoang hop le: 20 den 260");
-            if (systolic < 40 || systolic > 300) throw VetException.invalid("max_bp_systolic", "Khoang hop le: 40 den 300");
-            if (diastolic < 20 || diastolic > 200) throw VetException.invalid("max_bp_diastolic", "Khoang hop le: 20 den 200");
-            Map<String, Object> result = new LinkedHashMap<>(fields);
-            result.put("lane", participant.get("lane"));
-            result.put("rank", null);
-            results.add(result);
-        }
-        return results;
-    }
-
-    public Map<String, Object> detail(String email, UUID simulationId) {
-        access.requireRole(email, "HEAD_TRAINER");
+    /** Server maintenance is independent of whether the creator is still an active user. */
+    @Transactional
+    public Map<String,Object> advance(UUID simulationId) {
         String id = simulationId.toString();
-        var rows = db.query("SELECT * FROM race_simulations WHERE id=?", VetRows.MAPPER, id);
-        if (rows.isEmpty()) throw new VetException(404, "RACE_NOT_FOUND", "Khong tim thay cuoc dua");
-        Map<String, Object> result = new LinkedHashMap<>(rows.getFirst());
-        result.put("horses", db.query("SELECT sh.*,h.horse_name,h.image_url FROM race_simulation_horses sh"
-                + " JOIN horses h ON h.id=sh.horse_id WHERE sh.simulation_id=? ORDER BY sh.lane", VetRows.MAPPER, id));
-        result.put("results", db.query("SELECT m.*,h.horse_name,sh.baseline_stamina_score AS stamina_score FROM race_simulation_metrics m"
-                + " JOIN horses h ON h.id=m.horse_id JOIN race_simulation_horses sh ON sh.simulation_id=m.simulation_id AND sh.horse_id=m.horse_id"
-                + " WHERE m.simulation_id=? ORDER BY m.rank,m.lane", VetRows.MAPPER, id));
+        var session = lockedSession(id);
+        reconcile(session);
+        Map<String,Object> result = new LinkedHashMap<>(db.query("SELECT * FROM race_simulations WHERE id=?",VetRows.MAPPER,id).getFirst());
+        var horses = db.query("SELECT sh.*,h.horse_name,h.image_url FROM race_simulation_horses sh JOIN horses h ON h.id=sh.horse_id"
+                + " WHERE sh.simulation_id=? ORDER BY sh.lane",VetRows.MAPPER,id);
+        for (var horse : horses) horse.put("base_resting_bp",Map.of("systolic",horse.get("base_bp_systolic"),"diastolic",horse.get("base_bp_diastolic")));
+        int elapsed = recorder.elapsed(result), duration = ((Number)result.get("duration_seconds")).intValue();
+        result.put("simulation_id",id); result.put("horses",horses);
+        result.put("injury_alert_heart_rate",injuryAlertHeartRate); result.put("injury_alert_speed_kmh",injuryAlertSpeed);
+        result.put("elapsed_seconds",elapsed); result.put("sampling_interval_seconds",RaceSimulationFormula.cadence(duration));
+        result.put("server_time",time.now());
+        double progress = elapsed/(double)duration;
+        result.put("phase",progress<0.2 ? "Warmup" : progress<0.7 ? "Work" : progress<0.9 ? "Cooldown" : "Recovery");
+        result.put("readings",db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds",VetRows.MAPPER,id));
+        result.put("results",db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM race_simulation_metrics m"
+                + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? ORDER BY m.lane",VetRows.MAPPER,id));
         return result;
     }
 
-    private Map<String, Object> calculateResult(Map<String, Object> horse, int distanceMeters) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        String horseId = horse.get("horse_id").toString();
-        int seed = ((Number) horse.get("seed")).intValue();
-        double baseSpeed = ((Number) horse.get("base_max_speed_kmh")).doubleValue();
-        int restingHeartRate = ((Number) horse.get("base_resting_heart_rate")).intValue();
-        int restingSystolic = ((Number) horse.get("base_bp_systolic")).intValue();
-        int restingDiastolic = ((Number) horse.get("base_bp_diastolic")).intValue();
-        double speedSum = 0;
-        int maxHeartRate = 0, maxSystolic = 0, maxDiastolic = 0;
-        for (int index = 0; index <= 100; index++) {
-            double progress = index / 100.0;
-            double speed = Math.max(0, baseSpeed * (speedFactor(progress)
-                    + (seededNoise(seed, progress, 0) - 0.5) * 0.03));
-            double ratio = baseSpeed <= 0 ? 0 : speed / baseSpeed;
-            int heartRate = (int) Math.round(Math.max(restingHeartRate, Math.min(230,
-                    restingHeartRate + (220 - restingHeartRate) * ratio * 0.7
-                            + (seededNoise(seed, progress, 0x4f1bbcdc) - 0.5) * 7)));
-            int systolic = (int) Math.round(Math.max(40, Math.min(300,
-                    restingSystolic + ratio * 40 + (seededNoise(seed, progress, 0x7a143589) - 0.5) * 8)));
-            int diastolic = (int) Math.round(Math.max(60, Math.min(90,
-                    restingDiastolic + 3 * Math.sin(progress * Math.PI * 2)
-                            + (seededNoise(seed, progress, 0x1b873593) - 0.5) * 6)));
-            speedSum += speed;
-            maxHeartRate = Math.max(maxHeartRate, heartRate);
-            maxSystolic = Math.max(maxSystolic, systolic);
-            maxDiastolic = Math.max(maxDiastolic, diastolic);
+    @Transactional
+    public List<Map<String,Object>> activeSessions(String email) {
+        access.requireRole(email,"HEAD_TRAINER");
+        var ids = db.query("SELECT rs.id FROM race_simulations rs JOIN race_simulation_horses sh ON sh.simulation_id=rs.id"
+                + " WHERE rs.status='Running' ORDER BY sh.horse_id,rs.id",VetRows.MAPPER);
+        var result = new ArrayList<Map<String,Object>>();
+        for (var row : ids) {
+            var session = advance(UUID.fromString(row.get("id").toString()));
+            if ("Running".equals(session.get("status"))) result.add(session);
         }
-        double averageSpeed = speedSum / 101;
-        result.put("horse_id", horseId);
-        result.put("lane", horse.get("lane"));
-        result.put("finish_time_seconds", BigDecimal.valueOf(distanceMeters / (averageSpeed / 3.6)).setScale(2, RoundingMode.HALF_UP));
-        result.put("avg_speed_kmh", BigDecimal.valueOf(averageSpeed).setScale(2, RoundingMode.HALF_UP));
-        result.put("max_heart_rate", maxHeartRate);
-        result.put("max_bp_systolic", maxSystolic);
-        result.put("max_bp_diastolic", maxDiastolic);
-        result.put("stamina_score", horse.get("baseline_stamina_score"));
         return result;
     }
 
-    private double speedFactor(double progress) {
-        double p = clamp(progress, 0, 1);
-        if (p < 0.15) {
-            double x = p / 0.15;
-            double eased = x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
-            return 0.93 * eased;
-        }
-        if (p < 0.8) return 0.94 + 0.035 * Math.sin(((p - 0.15) / 0.65) * Math.PI);
-        return 0.975 - 0.105 * ((p - 0.8) / 0.2);
+    @Transactional
+    public Map<String,Object> active(String email) {
+        var sessions = activeSessions(email);
+        return sessions.stream().max(Comparator.comparing((Map<String,Object> row) -> (Instant)row.get("created_at"))
+                .thenComparing(row -> row.get("id").toString())).orElseGet(Collections::emptyMap);
     }
 
-    private double seededNoise(int seed, double progress, int salt) {
-        int sample = (int) Math.floor(clamp(progress, 0, 1) * 1000);
-        int value = seed ^ salt ^ (sample * 0x45d9f3b);
-        value ^= value >>> 16;
-        value *= 0x45d9f3b;
-        value ^= value >>> 16;
-        return (value & 0x7fffffff) / (double) 0x7fffffff;
+    @Transactional
+    public List<Map<String,Object>> createGroup(String email, String ip, JsonNode body) {
+        access.requireRole(email,"HEAD_TRAINER");
+        JsonNode items = body == null ? null : body.get("sessions");
+        if (items == null || !items.isArray() || items.size()<1 || items.size()>5)
+            throw VetException.invalid("sessions","Chon tu 1 den 5 buoi tap, moi ngua mot buoi");
+        var requests = new TreeMap<String,JsonNode>();
+        var scheduleIds = new HashSet<String>();
+        for (var item : items) {
+            String horse = horseIds(item.get("horse_ids")).getFirst();
+            var fields = VetInput.parse(item,"training_schedule_id:uuid");
+            VetInput.required(fields,"training_schedule_id");
+            if (requests.putIfAbsent(horse,item) != null || !scheduleIds.add(fields.get("training_schedule_id").toString()))
+                throw VetException.invalid("sessions","Moi ngua va buoi tap chi duoc chon mot lan");
+        }
+        // Lock every horse in stable order before starting any session. The group is all-or-nothing.
+        for (String horse : requests.keySet()) trainingGuard.assertHorseNotLocked(horse);
+        var result = new ArrayList<Map<String,Object>>();
+        for (var item : requests.values()) result.add(create(email,ip,item));
+        return result;
+    }
+
+    @Transactional
+    public void markMissed(String email,UUID scheduleId) {
+        access.requireRole(email,"HEAD_TRAINER");
+        expireSchedule(scheduleId);
+    }
+
+    @Transactional
+    public void expireSchedule(UUID scheduleId) {
+        var rows=db.query("SELECT ts.calendar_event_id,ts.status,ce.event_date,ce.end_time FROM training_schedules ts"
+                + " JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.id=? FOR UPDATE OF ts",VetRows.MAPPER,scheduleId.toString());
+        if(rows.isEmpty() || !"Scheduled".equals(rows.getFirst().get("status"))) return;
+        var row=rows.getFirst();
+        if(row.get("end_time")==null || LocalDateTime.of((LocalDate)row.get("event_date"),(LocalTime)row.get("end_time")).atZone(VetTime.BUSINESS_ZONE).toInstant().isAfter(time.now())) return;
+        db.update("UPDATE training_schedules SET status='Missed' WHERE id=?",scheduleId.toString());
+        db.update("UPDATE calendar_events SET status='Missed' WHERE id=?",row.get("calendar_event_id"));
     }
 
     private List<String> horseIds(JsonNode node) {
         if (node == null || !node.isArray()) throw VetException.invalid("horse_ids", "Phai la mang UUID");
-        if (node.size() < 2 || node.size() > 5) throw VetException.invalid("horse_ids", "So ngua phai tu 2 den 5");
+        if (node.size() != 1) throw VetException.invalid("horse_ids", "Moi gia lap tap luyen chi thuoc mot ngua");
         List<String> ids = new ArrayList<>();
         for (JsonNode value : node) {
             if (!value.isTextual()) throw VetException.invalid("horse_ids", "Moi ID phai la UUID hop le");
@@ -368,7 +312,7 @@ public class RaceSimulationService {
     }
 
     private double averageRecentStamina(String horseId) {
-        var values = db.queryForList("SELECT stamina_score FROM shared_training_metrics WHERE horse_id=? AND is_simulated=FALSE"
+        var values = db.queryForList("SELECT stamina_score FROM shared_training_metrics WHERE horse_id=?"
                 + " AND stamina_score IS NOT NULL ORDER BY recorded_at DESC,id DESC LIMIT 3", horseId);
         if (values.isEmpty()) return 5;
         double sum = 0;
@@ -376,6 +320,5 @@ public class RaceSimulationService {
         return sum / values.size();
     }
 
-    private double clamp(double value, double min, double max) { return Math.max(min, Math.min(max, value)); }
 
 }

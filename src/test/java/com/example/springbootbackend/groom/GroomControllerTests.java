@@ -70,6 +70,7 @@ class GroomControllerTests {
         db.update("DELETE FROM horses");
         db.update("DELETE FROM stable_boxes");
         db.update("DELETE FROM refresh_tokens");
+        db.update("DELETE FROM horse_image_uploads");
         db.update("DELETE FROM users");
         groomId = addUser(GROOM, "GROOM");
         otherGroomId = addUser(OTHER_GROOM, "GROOM");
@@ -145,20 +146,47 @@ class GroomControllerTests {
     }
 
     @Test
-    void incidentRequiresAssignmentAndNotifiesBothVeterinariansAndManagers() throws Exception {
+    void incidentRequiresAssignmentAndNotifiesManagers() throws Exception {
         createTask(assignedHorse, groomId, "Feeding", TODAY);
+        String imagePath="incidents/"+UUID.randomUUID()+".jpg";
+        db.update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)",imagePath,groomId,time.utcNow());
         String body = json.writeValueAsString(Map.of("issue_description", "Horse refused food this morning",
-                "image_url", "https://storage.test/incident.jpg"));
+                "image_url", imagePath));
         mvc.perform(post("/api/groom/horses/{id}/incidents", otherHorse).with(groom())
                         .contentType("application/json").content(body))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/api/groom/horses/{id}/incidents", assignedHorse).with(groom())
                         .contentType("application/json").content(body))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("Pending"))
-                .andExpect(jsonPath("$.image_url").value("https://storage.test/incident.jpg"));
-        assertThat(notificationCount(vetId, "Stable_Incidents")).isEqualTo(1);
+                .andExpect(jsonPath("$.image_url").value(imagePath));
+        assertThat(notificationCount(vetId, "Stable_Incidents")).isZero();
         assertThat(notificationCount(managerId, "Stable_Incidents")).isEqualTo(1);
         assertThat(db.queryForObject("SELECT count(*) FROM audit_logs WHERE action_performed LIKE 'REPORT_STABLE_INCIDENT:%'", Long.class)).isEqualTo(1);
+    }
+
+    @Test
+    void emergencyIncidentNotifiesVeterinariansAndManagers() throws Exception {
+        createTask(assignedHorse, groomId, "Feeding", TODAY);
+        mvc.perform(post("/api/groom/horses/{id}/incidents", assignedHorse).with(groom())
+                        .contentType("application/json").content(json.writeValueAsString(Map.of(
+                                "issue_description", "Horse collapsed", "is_emergency", true))))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.is_emergency").value(true));
+        assertThat(notificationCount(vetId, "Stable_Incidents")).isEqualTo(1);
+        assertThat(notificationCount(managerId, "Stable_Incidents")).isEqualTo(1);
+    }
+
+    @Test
+    void incidentRejectsExternalImagesAndImagesUploadedByAnotherGroom() throws Exception {
+        createTask(assignedHorse,groomId,"Feeding",TODAY);
+        String imagePath="incidents/"+UUID.randomUUID()+".jpg";
+        db.update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)",imagePath,otherGroomId,time.utcNow());
+        for(String image : new String[]{"https://storage.test/incident.jpg",imagePath}) {
+            mvc.perform(post("/api/groom/horses/{id}/incidents",assignedHorse).with(groom())
+                            .contentType("application/json").content(json.writeValueAsString(Map.of("issue_description","Horse refused food","image_url",image))))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.details[0].field").value("image_url"));
+        }
+        assertThat(db.queryForObject("SELECT count(*) FROM stable_incidents",Long.class)).isZero();
+        assertThat(notificationCount(vetId,"Stable_Incidents")).isZero();
     }
 
     @Test

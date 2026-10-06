@@ -2,6 +2,7 @@ package com.example.springbootbackend.horse.storage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import com.example.springbootbackend.veterinarian.support.VetTime;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,14 +27,17 @@ class HorseStorageTests {
         server.start();
         try {
             var db=mock(JdbcTemplate.class);
-            var storage=new HorseStorage("http://127.0.0.1:"+server.getAddress().getPort(),"test-secret","horse-images",db,new ObjectMapper());
+            var time=mock(VetTime.class);
+            var uploadedAt=java.time.LocalDateTime.of(2026,10,6,3,0);
+            when(time.utcNow()).thenReturn(uploadedAt);
+            var storage=new HorseStorage("http://127.0.0.1:"+server.getAddress().getPort(),"test-secret","horse-images",db,new ObjectMapper(),time);
             byte[] png=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
             var result=storage.upload(new MockMultipartFile("file","horse.png","image/png",png),7L);
             String path=(String)result.get("imagePath");
             assertThat(path).matches("horses/[a-f0-9-]{36}\\.png");
             assertThat(seenKey.get()).isEqualTo("test-secret");
             assertThat(seenBody.get()).isEqualTo(png);
-            verify(db).update("INSERT INTO horse_image_uploads(object_path,uploaded_by) VALUES (?,?)",path,7L);
+            verify(db).update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)",path,7L,uploadedAt);
             assertThat(storage.signedUrl(path).get("url").toString()).contains("/storage/v1/object/sign/").doesNotContain("test-secret");
             assertThat(new String(seenBody.get(),StandardCharsets.UTF_8)).contains("300");
         } finally { server.stop(0); }

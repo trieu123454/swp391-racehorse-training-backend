@@ -117,6 +117,10 @@ public class GroomWorkspaceService {
         if (!List.of("Scheduled", "InProgress").contains(session.get("status")))
             throw new VetException(409, "SESSION_CANNOT_BE_COMPLETED", "Training session is not open for completion");
 
+        if (!db.query("SELECT id FROM race_simulations WHERE training_schedule_id=? AND status='Running'",VetRows.MAPPER,id).isEmpty())
+            throw new VetException(409,"SIMULATION_RUNNING","Buoi tap dang thu du lieu; Head Trainer can luu ket qua gia lap truoc");
+        if (!"Rest".equals(session.get("session_type")) && !"InProgress".equals(session.get("status")))
+            throw new VetException(409,"SESSION_NOT_STARTED","Buoi tap van dong phai duoc bat dau truoc khi xac nhan");
         LocalDate eventDate = (LocalDate) session.get("event_date");
         var endTime = (java.time.LocalTime) session.get("end_time");
         LocalDateTime scheduledEnd = LocalDateTime.of(eventDate,
@@ -327,7 +331,8 @@ public class GroomWorkspaceService {
         List<Long> trainers = db.queryForList("SELECT DISTINCT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
                         + "WHERE r.role_name='HEAD_TRAINER' AND u.status='APPROVED' AND u.deleted_at IS NULL "
                         + "AND u.must_change_password=FALSE AND ("
-                        + "EXISTS (SELECT 1 FROM training_plans tp WHERE tp.horse_id=? AND tp.created_by=u.user_id "
+                        + "EXISTS (SELECT 1 FROM training_plans tp JOIN training_plan_horses tph ON tph.training_plan_id=tp.id"
+                        + " WHERE tph.horse_id=? AND tp.created_by=u.user_id "
                         + "AND (tp.start_date IS NULL OR tp.start_date<=?) AND (tp.end_date IS NULL OR tp.end_date>=?)) "
                         + "OR EXISTS (SELECT 1 FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
                         + "WHERE ts.horse_id=? AND ts.created_by=u.user_id AND ts.status IN ('Scheduled','InProgress','Blocked') "

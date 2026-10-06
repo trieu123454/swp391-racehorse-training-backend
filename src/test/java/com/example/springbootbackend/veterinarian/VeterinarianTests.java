@@ -57,7 +57,7 @@ class VeterinarianTests {
     }
     void addUser(String email,String role) { db.update("INSERT INTO users(full_name,email,password_hash,role_id,status) SELECT ?,?,'hash',role_id,'APPROVED' FROM roles WHERE role_name=?",email,email,role); }
     long uid(String email) { return db.queryForObject("SELECT user_id FROM users WHERE email=?",Long.class,email); }
-    ResultActions call(MockHttpServletRequestBuilder request) throws Exception { return mvc.perform(request.with(user(VET))); }
+    ResultActions call(MockHttpServletRequestBuilder request) throws Exception { return mvc.perform(request.with(user(VET).roles("VETERINARIAN"))); }
     MockHttpServletRequestBuilder body(MockHttpServletRequestBuilder request,Object body) throws Exception { return request.contentType("application/json").content(json.writeValueAsString(body)); }
     JsonNode result(ResultActions result) throws Exception { return json.readTree(result.andReturn().getResponse().getContentAsString()); }
     Map<String,Object> exam() { return new LinkedHashMap<>(Map.of("temperature_c",38.9,"heart_rate",42,"respiratory_rate",12)); }
@@ -71,18 +71,24 @@ class VeterinarianTests {
         mvc.perform(get(path)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
         mvc.perform(get(path).header("Authorization","Bearer invalid")).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
         for(String email:List.of("groom@test.com","owner@test.com","trainer@test.com","manager@test.com"))
-            mvc.perform(body(post(path),exam()).with(user(email))).andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+            mvc.perform(body(post(path),exam()).with(user(email).roles(db.queryForObject(
+                    "SELECT r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.email=?",String.class,email))))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
     @Test void realJwtUsesCurrentRoleAndStatus() throws Exception {
         String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
         String path="/api/horses/"+horse+"/health-exams";
         mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isOk());
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='GROOM') WHERE email=?",VET);
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='VETERINARIAN') WHERE email=?",VET);
         db.update("UPDATE users SET status='LOCKED' WHERE email=?",VET);
         mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
         db.update("UPDATE users SET status='APPROVED',must_change_password=TRUE WHERE email=?",VET);
         mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
         db.update("UPDATE users SET must_change_password=FALSE,deleted_at=CURRENT_TIMESTAMP WHERE email=?",VET);
-        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden());
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
     @Test void createExamIgnoresProtectedFieldsAndReturnsAlertsUtcDoctorAndAudit() throws Exception {
         var body=exam(); body.put("doctor_id",uid(OTHER)); body.put("horse_id",otherHorse); body.put("exam_date","2026-09-28T09:30:00+07:00");
@@ -110,7 +116,7 @@ class VeterinarianTests {
         String id=createExam();
         call(body(patch("/api/health-exams/"+id),Map.of("temperature_c",38.90,"doctor_id",999))).andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(false));
         assertThat(db.queryForObject("SELECT count(*) FROM health_exam_logs",Long.class)).isZero();
-        mvc.perform(body(patch("/api/health-exams/"+id),Map.of("temperature_c",38.4)).with(user(OTHER)))
+        mvc.perform(body(patch("/api/health-exams/"+id),Map.of("temperature_c",38.4)).with(user(OTHER).roles("VETERINARIAN")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.exam.doctor.id").value(uid(VET)));
         call(get("/api/health-exams/"+id+"/logs")).andExpect(status().isOk()).andExpect(jsonPath("$.data[0].edited_by.id").value(uid(OTHER)))
                 .andExpect(jsonPath("$.data[0].changes.length()").value(1)).andExpect(jsonPath("$.data[0].changes[0].old_value").value(38.9));

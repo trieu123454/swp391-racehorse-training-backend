@@ -20,15 +20,22 @@ import org.springframework.web.bind.annotation.*;
 public class HeadTrainerController {
     private final HeadTrainerService service;
     private final RaceSimulationService simulations;
+    private final TrainingAnalysisService analysis;
 
-    public HeadTrainerController(HeadTrainerService service, RaceSimulationService simulations) {
+    public HeadTrainerController(HeadTrainerService service, RaceSimulationService simulations, TrainingAnalysisService analysis) {
         this.service = service;
-        this.simulations = simulations;
+        this.simulations = simulations; this.analysis=analysis;
+    }
+
+    @GetMapping("/horses/{horseId}/training-analysis")
+    public Map<String,Object> trainingAnalysis(Principal user,@PathVariable UUID horseId,
+            @RequestParam(required=false) LocalDate from,@RequestParam(required=false) LocalDate to) {
+        return analysis.report(user.getName(),horseId,from,to);
     }
 
     @GetMapping("/head-trainer/overview")
     public Map<String, Object> overview(Principal user,
-            @RequestParam(defaultValue = "false") boolean include_simulated) {
+            @RequestParam(defaultValue = "true") boolean include_simulated) {
         return service.overview(user.getName(), include_simulated);
     }
 
@@ -46,14 +53,14 @@ public class HeadTrainerController {
     @GetMapping("/horses/{horseId}/training-metrics")
     public List<Map<String, Object>> metrics(Principal user, @PathVariable UUID horseId,
             @RequestParam(required = false) LocalDate from, @RequestParam(required = false) LocalDate to,
-            @RequestParam(defaultValue = "false") boolean include_simulated) {
+            @RequestParam(defaultValue = "true") boolean include_simulated) {
         return service.metrics(user.getName(), horseId, from, to, include_simulated);
     }
 
     @GetMapping("/head-trainer/training-metrics/compare")
     public Map<String, Object> compareMetrics(Principal user, @RequestParam String horse_ids,
             @RequestParam(required = false) LocalDate from, @RequestParam(required = false) LocalDate to,
-            @RequestParam(defaultValue = "false") boolean include_simulated) {
+            @RequestParam(defaultValue = "true") boolean include_simulated) {
         return service.compareMetrics(user.getName(), horse_ids, from, to, include_simulated);
     }
 
@@ -69,6 +76,13 @@ public class HeadTrainerController {
     public Map<String, Object> createPlan(Principal user, HttpServletRequest request,
             @PathVariable UUID horseId, @RequestBody JsonNode body) {
         return service.createPlan(user.getName(), request.getRemoteAddr(), horseId, body);
+    }
+
+    @PostMapping("/training-plans")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> createSharedPlan(Principal user, HttpServletRequest request,
+            @RequestBody JsonNode body) {
+        return service.createPlan(user.getName(), request.getRemoteAddr(), null, body);
     }
 
     @GetMapping("/horses/{horseId}/training-plans")
@@ -163,9 +177,32 @@ public class HeadTrainerController {
         return simulations.create(user.getName(), request.getRemoteAddr(), body);
     }
 
+    @GetMapping("/head-trainer/race-simulations/active")
+    public Map<String,Object> activeSimulation(Principal user) {
+        return simulations.active(user.getName());
+    }
+
+    @GetMapping("/head-trainer/race-simulations/active-sessions")
+    public Map<String,Object> activeSimulations(Principal user) {
+        return Map.of("data",simulations.activeSessions(user.getName()));
+    }
+
+    @PostMapping("/head-trainer/race-simulations/group")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String,Object> createSimulationGroup(Principal user, HttpServletRequest request,
+            @RequestBody JsonNode body) {
+        return Map.of("data",simulations.createGroup(user.getName(),request.getRemoteAddr(),body));
+    }
+
     @GetMapping("/head-trainer/race-simulations/{id}")
     public Map<String, Object> simulation(Principal user, @PathVariable UUID id) {
         return simulations.detail(user.getName(), id);
+    }
+
+    @PostMapping("/head-trainer/race-simulations/{id}/restart")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String,Object> restartSimulation(Principal user, HttpServletRequest request, @PathVariable UUID id) {
+        return simulations.restartWithCurrentSpeedModel(user.getName(),request.getRemoteAddr(),id);
     }
 
     @PostMapping("/head-trainer/race-simulations/{id}/finish")
