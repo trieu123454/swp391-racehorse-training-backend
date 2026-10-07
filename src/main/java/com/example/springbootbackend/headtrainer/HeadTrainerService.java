@@ -238,7 +238,7 @@ public class HeadTrainerService {
     @Transactional
     public Map<String, Object> createPlan(String email, String ip, UUID horseId, JsonNode body) {
         long actor = requireTrainer(email);
-        List<String> horses = planHorseIds(body, horseId.toString());
+        List<String> horses = planHorseIds(body, horseId == null ? null : horseId.toString());
         for (String horse : horses) trainingGuard.assertHorseNotLocked(horse);
         Map<String, Object> fields = parsePlan(body);
         VetInput.required(fields, "stage_name", "start_date", "end_date", "target_distance_meters", "target_workload_minutes", "target_track_surface", "target_intensity");

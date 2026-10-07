@@ -72,6 +72,18 @@ class HeadTrainerControllerTests {
     }
 
     @Test
+    void sharedPlanUsesHorseIdsFromBody() throws Exception {
+        Map<String, Object> payload = plan("Shared foundation");
+        payload.put("horse_ids", List.of(horse, otherHorse));
+        JsonNode created = result(call(body(post("/api/training-plans"), payload))
+                .andExpect(status().isCreated()));
+        assertThat(created.get("horse_ids").size()).isEqualTo(2);
+
+        call(body(post("/api/training-plans"), plan("Missing horses")))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void trainerRoleIsRequiredAndLockBlocksPlanScheduleAndRaceEntry() throws Exception {
         mvc.perform(get("/api/head-trainer/overview")).andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
