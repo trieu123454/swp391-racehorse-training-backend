@@ -12,6 +12,6 @@ public class OpenApiConfig {
     OpenAPI applicationOpenApi() {
         return new OpenAPI().components(new Components().addSecuritySchemes("bearerAuth",
                 new SecurityScheme().type(SecurityScheme.Type.HTTP).scheme("bearer").bearerFormat("JWT")
-                        .description("Paste the accessToken returned by /api/auth/login. Do not include Bearer.")));
+                        .description("Paste the accessToken returned by /api/auth/login. Do not include Bearer. Swagger verifies it with /api/auth/me.")));
     }
 }

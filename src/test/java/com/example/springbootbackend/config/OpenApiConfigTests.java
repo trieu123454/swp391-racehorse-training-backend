@@ -25,4 +25,15 @@ class OpenApiConfigTests {
                 .andExpect(jsonPath("$.paths['/api/auth/me'].get.security[0].bearerAuth").isArray())
                 .andExpect(jsonPath("$.paths['/api/auth/login'].post.security").doesNotExist());
     }
+
+    @Test
+    void swaggerChecksBearerTokenBeforeMarkingItAuthorized() throws Exception {
+        mvc.perform(get("/swagger-ui/swagger-initializer.js"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("SwaggerTokenValidationPlugin,")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("fetch(\"/api/auth/me\"")));
+
+        mvc.perform(get("/api/auth/me").header("Authorization", "Bearer made-up-token"))
+                .andExpect(status().isUnauthorized());
+    }
 }
