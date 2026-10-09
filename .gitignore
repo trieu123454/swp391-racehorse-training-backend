@@ -9,3 +9,5 @@ target/
 !.env.example
 application-local.properties
 src/main/resources/application-local.properties
+
+.fake

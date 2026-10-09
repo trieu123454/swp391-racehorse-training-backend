@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
+        <byte-buddy.version>1.18.10</byte-buddy.version>
     </properties>
 
     <dependencies>

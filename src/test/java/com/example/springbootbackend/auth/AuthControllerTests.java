@@ -239,6 +239,17 @@ class AuthControllerTests {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").isString());
     }
 
+    @Test
+    void viteDevServerCanPreflightLoginRequests() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options("/api/auth/login")
+                        .header("Origin", "http://localhost:5173")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "content-type,authorization"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:5173"))
+                .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("POST")));
+    }
+
     private AppUser seed(String role, String email) {
         return users.save(new AppUser("Test User", email, null, encoder.encode("password123"),
                 roles.findByName(role).orElseThrow()));
