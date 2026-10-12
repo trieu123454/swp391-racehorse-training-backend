@@ -1,10 +1,12 @@
 package com.example.springbootbackend.auth.service;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.UUID;
 
 import com.example.springbootbackend.auth.dto.request.GoogleLoginRequest;
 import com.example.springbootbackend.auth.dto.request.LoginRequest;
+import com.example.springbootbackend.auth.dto.request.ChangePasswordRequest;
 import com.example.springbootbackend.auth.dto.request.RefreshTokenRequest;
 import com.example.springbootbackend.auth.dto.request.RegisterRequest;
 import com.example.springbootbackend.auth.dto.response.AuthResponse;
@@ -25,12 +27,15 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AuthService {
+    private static final Set<String> REVIEWABLE_ROLES = Set.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
 
     private final AppUserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -63,6 +68,9 @@ public class AuthService {
 
     @Transactional
     public UserResponse register(RegisterRequest request) {
+        if (!StringUtils.hasText(request.roleName()) || !"HORSE_OWNER".equalsIgnoreCase(request.roleName().trim())) {
+            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
+        }
         if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
             throw new AuthException("Password must not exceed 72 UTF-8 bytes");
         }
@@ -107,6 +115,23 @@ public class AuthService {
         return createAuthResponse(user);
     }
 
+    @Transactional
+    public AuthResponse changePassword(String email, ChangePasswordRequest request) {
+        AppUser user = findUser(email);
+        ensureApproved(user);
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new AuthException("Current password is incorrect");
+        }
+        if (request.newPassword().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new AuthException("Password must not exceed 72 UTF-8 bytes");
+        }
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw new AuthException("New password must be different from the current password");
+        }
+        user.changePassword(passwordEncoder.encode(request.newPassword()));
+        return createAuthResponse(user);
+    }
+
     @Transactional(noRollbackFor = ApprovalPendingException.class)
     public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
         GoogleTokenService.GoogleProfile profile = googleTokenService.verify(request.idToken());
@@ -138,18 +163,20 @@ public class AuthService {
 
     @Transactional
     public UserResponse approve(Long userId, String approverEmail) {
-        AppUser approver = findUser(approverEmail);
+        AppUser approver = requireClubManager(approverEmail);
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("User not found"));
+        ensurePendingStaff(user);
         user.approve(approver);
         return UserResponse.from(user);
     }
 
     @Transactional
     public UserResponse reject(Long userId, String approverEmail) {
-        AppUser approver = findUser(approverEmail);
+        AppUser approver = requireClubManager(approverEmail);
         AppUser user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("User not found"));
+        ensurePendingStaff(user);
         user.reject(approver);
         return UserResponse.from(user);
     }
@@ -167,11 +194,11 @@ public class AuthService {
     }
 
     private AppUser createGoogleUser(GoogleTokenService.GoogleProfile profile, String roleName) {
-        if (!StringUtils.hasText(roleName)) {
-            throw new AuthException("roleName is required for first Google login");
+        if (StringUtils.hasText(roleName) && !"HORSE_OWNER".equalsIgnoreCase(roleName.trim())) {
+            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
         }
 
-        Role role = findRole(roleName);
+        Role role = findRole("HORSE_OWNER");
         AppUser user = new AppUser(
                 profile.fullName(),
                 profile.email().trim().toLowerCase(java.util.Locale.ROOT),
@@ -205,6 +232,12 @@ public class AuthService {
     }
 
     private void ensureApproved(AppUser user) {
+        if (user.getDeletedAt() != null) {
+            throw new AuthException("Account is deleted");
+        }
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new AuthException("Tài khoản đã bị khóa");
+        }
         // Only pending horse owners can be automatically activated.
         // Rejected and locked accounts must never be automatically reactivated.
         if (user.getStatus() == UserStatus.PENDING && !requiresApproval(user.getRole())) {
@@ -220,5 +253,22 @@ public class AuthService {
 
     private boolean requiresApproval(Role role) {
         return !"HORSE_OWNER".equals(role.getName());
+    }
+
+    private AppUser requireClubManager(String email) {
+        AppUser manager = findUser(email);
+        ensureApproved(manager);
+        if (manager.isMustChangePassword() || !"CLUB_MANAGER".equals(manager.getRole().getName())) {
+            throw new AuthException("Only an active Club Manager can review accounts");
+        }
+        return manager;
+    }
+
+    private void ensurePendingStaff(AppUser user) {
+        if (user.getDeletedAt() != null || user.getStatus() != UserStatus.PENDING
+                || !REVIEWABLE_ROLES.contains(user.getRole().getName())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only pending staff accounts can be reviewed");
+        }
     }
 }

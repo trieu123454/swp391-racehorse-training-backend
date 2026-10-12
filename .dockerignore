@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+Microsoft
+target
+application-local.properties
+src/main/resources/application-local.properties
+.env
+.env.*
+!.env.example
+*.log

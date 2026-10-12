@@ -12,6 +12,7 @@ public record UserResponse(
         String phone,
         String roleName,
         UserStatus status,
+        boolean mustChangePassword,
         LocalDateTime approvedAt,
         LocalDateTime createdAt
 ) {
@@ -23,6 +24,7 @@ public record UserResponse(
                 user.getPhone(),
                 user.getRole().getName(),
                 user.getStatus(),
+                user.isMustChangePassword(),
                 user.getApprovedAt(),
                 user.getCreatedAt()
         );

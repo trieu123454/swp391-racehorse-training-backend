@@ -42,14 +42,28 @@ public class SecurityConfig {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
-                .exceptionHandling(errors -> errors.authenticationEntryPoint((request, response, ex) -> {
-                    response.setStatus(401);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"message\":\"Authentication required\"}");
-                }))
+                .exceptionHandling(errors -> errors
+                        .authenticationEntryPoint((request, response, ex) -> {
+                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 401,
+                                        "UNAUTHENTICATED", "Vui lòng đăng nhập");
+                                return;
+                            }
+                            response.setStatus(401);
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Authentication required\"}");
+                        })
+                        .accessDeniedHandler((request, response, ex) -> {
+                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                                        "FORBIDDEN", "Tài khoản không được phép truy cập");
+                                return;
+                            }
+                            response.sendError(403);
+                        }))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/me", "/api/auth/users/**").authenticated()
+                        .requestMatchers("/api/auth/me", "/api/auth/users/**", "/api/auth/change-password").authenticated()
                         .requestMatchers(
                                 "/api/auth/**",
                                 "/api/health",
@@ -65,12 +79,12 @@ public class SecurityConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(
-            @Value("${app.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000}")
+            @Value("${app.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8082,http://127.0.0.1:8082}")
             List<String> allowedOrigins) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Origin", "Accept", "X-Requested-With"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

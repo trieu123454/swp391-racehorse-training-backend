@@ -37,6 +37,9 @@ public class AppUser {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword;
+
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "role_id", nullable = false)
     private Role role;
@@ -57,6 +60,9 @@ public class AppUser {
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
 
     protected AppUser() {
     }
@@ -101,6 +107,10 @@ public class AppUser {
         return passwordHash;
     }
 
+    public boolean isMustChangePassword() {
+        return mustChangePassword;
+    }
+
     public Role getRole() {
         return role;
     }
@@ -117,6 +127,10 @@ public class AppUser {
         return createdAt;
     }
 
+    public LocalDateTime getDeletedAt() {
+        return deletedAt;
+    }
+
     public void approve(AppUser approver) {
         status = UserStatus.APPROVED;
         approvedBy = approver;
@@ -131,5 +145,10 @@ public class AppUser {
 
     public void lock() {
         status = UserStatus.LOCKED;
+    }
+
+    public void changePassword(String passwordHash) {
+        this.passwordHash = passwordHash;
+        this.mustChangePassword = false;
     }
 }

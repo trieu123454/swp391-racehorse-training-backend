@@ -3,6 +3,7 @@ package com.example.springbootbackend.auth.controller;
 import java.security.Principal;
 
 import com.example.springbootbackend.auth.dto.request.GoogleLoginRequest;
+import com.example.springbootbackend.auth.dto.request.ChangePasswordRequest;
 import com.example.springbootbackend.auth.dto.request.LoginRequest;
 import com.example.springbootbackend.auth.dto.request.LogoutRequest;
 import com.example.springbootbackend.auth.dto.request.RefreshTokenRequest;
@@ -43,6 +44,7 @@ public class AuthController {
     }
 
     @GetMapping("/me")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("isAuthenticated()")
     public UserResponse currentUser(Principal principal) {
         return authService.currentUser(principal.getName());
@@ -62,6 +64,13 @@ public class AuthController {
         return authService.login(request);
     }
 
+    @PostMapping("/change-password")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
+    @PreAuthorize("isAuthenticated()")
+    public AuthResponse changePassword(Principal principal, @Valid @RequestBody ChangePasswordRequest request) {
+        return authService.changePassword(principal.getName(), request);
+    }
+
     @PostMapping("/google")
     public AuthResponse loginWithGoogle(@Valid @RequestBody GoogleLoginRequest request) {
         return authService.loginWithGoogle(request);
@@ -79,12 +88,14 @@ public class AuthController {
     }
 
     @PostMapping("/users/{userId}/approve")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
     public UserResponse approve(@PathVariable Long userId, Principal principal) {
         return authService.approve(userId, principal.getName());
     }
 
     @PostMapping("/users/{userId}/reject")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
     public UserResponse reject(@PathVariable Long userId, Principal principal) {
         return authService.reject(userId, principal.getName());
