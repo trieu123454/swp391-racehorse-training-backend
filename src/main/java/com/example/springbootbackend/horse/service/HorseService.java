@@ -103,6 +103,19 @@ public class HorseService {
         return horse;
     }
 
+    public List<Map<String,Object>> approvedRegistrationDocuments(Actor actor,UUID horseId) {
+        if(!Set.of("CLUB_MANAGER","HORSE_OWNER").contains(actor.role()))
+            throw new ResponseStatusException(FORBIDDEN,"Không có quyền xem giấy tờ sở hữu");
+        detail(actor,horseId);
+        String ownerFilter=actor.role().equals("HORSE_OWNER")?" AND r.owner_id=?":"";
+        List<Object> args=new ArrayList<>();
+        args.add(horseId.toString());
+        if(actor.role().equals("HORSE_OWNER")) args.add(actor.id());
+        return db.queryForList("SELECT d.id,d.original_filename AS name,d.content_type,d.file_size,d.uploaded_at,d.object_path "
+                +"FROM horse_registration_documents d JOIN horse_registration_requests r ON r.id=d.request_id "
+                +"WHERE r.approved_horse_id=? AND r.status='APPROVED'"+ownerFilter+" ORDER BY d.uploaded_at DESC",args.toArray());
+    }
+
     private boolean groomHasAssignment(long groomId,String horseId) {
         LocalDate today=time.today();
         LocalDate from=today.minusDays(groomAssignmentWindowDays);

@@ -95,6 +95,8 @@ public class HorseRegistrationService {
         String action = requiredText(body, "action", 10).toUpperCase(Locale.ROOT);
         String note = optionalText(body, "reviewNote", 1000);
         if ("REJECT".equals(action)) {
+            if (!StringUtils.hasText(note))
+                throw new ResponseStatusException(BAD_REQUEST, "Vui lòng nhập lý do trước khi từ chối yêu cầu.");
             db.update("UPDATE horse_registration_requests SET status='REJECTED',reviewed_by=?,reviewed_at=?,review_note=? WHERE id=? AND status='PENDING'",
                     managerId, time.utcNow(), note, id.toString());
             notifyOwner(((Number) request.get("owner_id")).longValue(), id.toString(), "Yêu cầu hồ sơ ngựa " + request.get("horse_name") + " chưa được duyệt." + (note == null ? "" : " Lý do: " + note));

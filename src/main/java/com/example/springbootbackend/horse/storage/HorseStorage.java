@@ -105,15 +105,20 @@ public class HorseStorage {
         return detect(b);
     }
     public Map<String,Object> signedUrl(String path) {
+        return signedUrl(path,null);
+    }
+    public Map<String,Object> signedUrl(String path,String downloadFilename) {
         if(path==null) return Map.of("hasImage",false);
-        if(isCloudinaryPath(path)) return cloudinaryUrl(path);
+        if(isCloudinaryPath(path)) return cloudinaryUrl(path,downloadFilename);
         if(!path.matches("(horses|incidents)/[0-9a-fA-F-]{36}\\.(jpg|png|webp)|horse-documents/[0-9a-fA-F-]{36}\\.(jpg|png|webp|pdf)")) throw new ResponseStatusException(BAD_REQUEST,"Đường dẫn tệp không hợp lệ");
         String response=send("/object/sign/"+bucket+"/"+path,"application/json","{\"expiresIn\":300}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         if(response==null) return Map.of("hasImage",false);
         try {
             String signed=json.readTree(response).path("signedURL").asText();
             if(!signed.startsWith("/object/sign/")) throw new IllegalArgumentException();
-            return Map.of("hasImage",true,"url",url+"/storage/v1"+signed,"expiresIn",300);
+            String signedUrl=url+"/storage/v1"+signed;
+            if(downloadFilename!=null && !downloadFilename.isBlank()) signedUrl+="&download="+encode(downloadFilename);
+            return Map.of("hasImage",true,"url",signedUrl,"expiresIn",300);
         } catch(Exception e) { throw new ResponseStatusException(BAD_GATEWAY,"Không lấy được link ảnh"); }
     }
 
@@ -130,7 +135,7 @@ public class HorseStorage {
                 +"|horse-documents/cloudinary/[0-9a-fA-F-]{36}\\.(jpg|png|webp|pdf)");
     }
 
-    private Map<String,Object> cloudinaryUrl(String path) {
+    private Map<String,Object> cloudinaryUrl(String path,String downloadFilename) {
         requireCloudinaryConfig();
         boolean document=path.startsWith("horse-documents/");
         String resourceType=document?"raw":"image";
@@ -141,18 +146,19 @@ public class HorseStorage {
             String category=path.startsWith("incidents/")?"incidents":"horses";
             publicId=category+"/"+fileName.substring(0,fileName.lastIndexOf('.'));
             if(category.equals("incidents") && path.startsWith("incidents/cloudinary-private/"))
-                return cloudinaryDownloadUrl("image",publicId,extension);
+                return cloudinaryDownloadUrl("image",publicId,extension,false);
             String delivery="https://res.cloudinary.com/"+cloudName+"/image/upload/"+publicId+"."+extension;
             return Map.of("hasImage",true,"url",delivery,"expiresIn",0);
         }
 
-        return cloudinaryDownloadUrl("raw",publicId,extension);
+        return cloudinaryDownloadUrl("raw",publicId,extension,downloadFilename!=null && !downloadFilename.isBlank());
     }
 
-    private Map<String,Object> cloudinaryDownloadUrl(String resourceType,String publicId,String extension) {
+    private Map<String,Object> cloudinaryDownloadUrl(String resourceType,String publicId,String extension,boolean attachment) {
         long timestamp=Instant.now().getEpochSecond();
         long expiresAt=timestamp+300;
         SortedMap<String,String> signedParameters=new TreeMap<>();
+        if(attachment) signedParameters.put("attachment","true");
         signedParameters.put("expires_at",Long.toString(expiresAt));
         signedParameters.put("format",extension);
         signedParameters.put("public_id",publicId);
