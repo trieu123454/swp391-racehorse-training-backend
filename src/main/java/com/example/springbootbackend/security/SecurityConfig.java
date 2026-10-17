@@ -1,6 +1,7 @@
 package com.example.springbootbackend.security;
 
 import javax.crypto.SecretKey;
+import jakarta.servlet.DispatcherType;
 
 import java.util.List;
 
@@ -63,6 +64,8 @@ public class SecurityConfig {
                         }))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Preserve the original error status on the container's internal error dispatch.
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/auth/me", "/api/auth/users/**", "/api/auth/change-password").authenticated()
                         .requestMatchers(
                                 "/api/auth/**",

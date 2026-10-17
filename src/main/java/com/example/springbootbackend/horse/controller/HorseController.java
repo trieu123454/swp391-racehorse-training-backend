@@ -35,6 +35,8 @@ public class HorseController {
     }
     @GetMapping("/{id}")
     public Map<String,Object> detail(Principal p,@PathVariable UUID id) { return horses.detail(horses.actor(p.getName(),false),id); }
+    @GetMapping("/{id}/ownership-history")
+    public List<Map<String,Object>> ownershipHistory(Principal p,@PathVariable UUID id) { return horses.ownershipHistory(horses.actor(p.getName(),true),id); }
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String,Object> create(Principal p,@Valid @RequestBody HorseRequest r) { return horses.save(horses.actor(p.getName(),true),null,r); }

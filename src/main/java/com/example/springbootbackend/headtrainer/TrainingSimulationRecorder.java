@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.*;
 import java.util.*;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -19,14 +18,12 @@ public class TrainingSimulationRecorder {
     private final JdbcTemplate db;
     private final VetTime time;
     private final NotificationService notifications;
-    private final int heartRateThreshold;
-    private final BigDecimal speedThreshold;
+    private final SimulationAlertPolicy alertPolicy;
 
     public TrainingSimulationRecorder(JdbcTemplate db, VetTime time, NotificationService notifications,
-            @Value("${app.head-trainer.injury-alert-heart-rate:220}") int heartRateThreshold,
-            @Value("${app.head-trainer.injury-alert-speed-kmh:60}") BigDecimal speedThreshold) {
+            SimulationAlertPolicy alertPolicy) {
         this.db = db; this.time = time; this.notifications = notifications;
-        this.heartRateThreshold = heartRateThreshold; this.speedThreshold = speedThreshold;
+        this.alertPolicy = alertPolicy;
     }
 
     public void interruptSchedule(String scheduleId, String reason) {
@@ -69,7 +66,11 @@ public class TrainingSimulationRecorder {
         for (int second = next; second <= elapsed; second += cadence) previous = save(session, horse, previous, second);
         if (terminal && (previous == null || number(previous,"elapsed_seconds") < elapsed)) save(session, horse, previous, elapsed);
         var readings = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds", VetRows.MAPPER, id);
-        if (readings.stream().anyMatch(this::exceedsThreshold)) notifyOnce(id, horse.get("horse_id").toString());
+        Integer recoveryHeartRate = terminal && !readings.isEmpty()
+                ? alertPolicy.estimateRecoveryHeartRate((int)number(horse,"base_resting_heart_rate"),maximum(readings,"heart_rate"),"Fatigue".equals(session.get("scenario")))
+                : null;
+        if (!alertPolicy.evaluate(horse,readings,recoveryHeartRate,cadence).isEmpty())
+            notifyOnce(id, horse.get("horse_id").toString());
         return readings;
     }
 
@@ -96,11 +97,10 @@ public class TrainingSimulationRecorder {
         var readings = capture(session,elapsed,true);
         if (readings.isEmpty()) return;
         var horse = db.query("SELECT * FROM race_simulation_horses WHERE simulation_id=?",VetRows.MAPPER,id).getFirst();
-        double distance = 0, peakSpeed = 0;
+        double distance = 0;
         int maxHr = 0, maxSys = 0, maxDia = 0;
         for (int i=0; i<readings.size(); i++) {
             var reading = readings.get(i);
-            peakSpeed = Math.max(peakSpeed,number(reading,"speed_kmh"));
             maxHr = Math.max(maxHr,((Number)reading.get("heart_rate")).intValue());
             maxSys = Math.max(maxSys,((Number)reading.get("bp_systolic")).intValue());
             maxDia = Math.max(maxDia,((Number)reading.get("bp_diastolic")).intValue());
@@ -111,9 +111,12 @@ public class TrainingSimulationRecorder {
             }
         }
         boolean completed = "Completed".equals(session.get("status"));
-        Integer recoveryHr = completed ? ((Number)readings.getLast().get("heart_rate")).intValue() : null;
-        BigDecimal stamina = completed ? decimal(RaceSimulationFormula.clamp(10-Math.max(0,recoveryHr-number(horse,"base_resting_heart_rate"))/15,0,10),2) : null;
-        boolean alert = maxHr > heartRateThreshold || BigDecimal.valueOf(peakSpeed).compareTo(speedThreshold)>0;
+        boolean terminal = List.of("Completed","Interrupted").contains(session.get("status"));
+        Integer recoveryHr = terminal ? alertPolicy.estimateRecoveryHeartRate(
+                (int)number(horse,"base_resting_heart_rate"),maxHr,"Fatigue".equals(session.get("scenario"))) : null;
+        BigDecimal stamina = terminal ? decimal(RaceSimulationFormula.clamp(10-Math.max(0,recoveryHr-number(horse,"base_resting_heart_rate"))/15,0,10),2) : null;
+        int cadence = RaceSimulationFormula.cadence(((Number)session.get("duration_seconds")).intValue());
+        boolean alert = !alertPolicy.evaluate(horse,readings,recoveryHr,cadence).isEmpty();
         BigDecimal average = decimal(elapsed == 0 ? 0 : distance/elapsed*3.6,2);
         String metricId = UUID.randomUUID().toString();
         Object recordedAt = VetRows.sqlValue((Instant)session.get("stopped_at"));
@@ -123,12 +126,13 @@ public class TrainingSimulationRecorder {
                 metricId,id,horse.get("horse_id"),horse.get("lane"),decimal(elapsed,2),average,maxHr,maxSys,maxDia,completed?1:null,alert,recordedAt);
         db.update("INSERT INTO training_metrics_logs(id,horse_id,training_schedule_id,recorded_by,body_weight_kg,max_heart_rate,avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,bp_diastolic,is_simulated,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?)",
                 metricId,horse.get("horse_id"),session.get("training_schedule_id"),session.get("created_by"),horse.get("body_weight_kg"),
-                maxHr,average,stamina,alert,completed ? "Training sensor simulation; recovery score is a model estimate"
-                        : "Interrupted training sensor simulation: " + session.get("stop_reason"),maxSys,maxDia,recordedAt);
+                maxHr,average,stamina,alert,completed ? "Training sensor simulation; recovery is an estimate after 15 minutes of modeled rest"
+                        : "Interrupted training sensor simulation; recovery estimate after 15 minutes of modeled rest. Reason: "
+                                + session.get("stop_reason"),maxSys,maxDia,recordedAt);
     }
 
-    private boolean exceedsThreshold(Map<String,Object> reading) {
-        return number(reading,"heart_rate") > heartRateThreshold || BigDecimal.valueOf(number(reading,"speed_kmh")).compareTo(speedThreshold)>0;
+    private int maximum(List<Map<String,Object>> readings,String key) {
+        return readings.stream().mapToInt(reading -> ((Number)reading.get(key)).intValue()).max().orElse(0);
     }
 
     private void notifyOnce(String simulationId, String horseId) {

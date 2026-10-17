@@ -9,7 +9,6 @@ import java.math.RoundingMode;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,18 +22,14 @@ public class RaceSimulationService {
     private final VetAudit audit;
     private final VetTime time;
     private final HorseTrainingGuard trainingGuard;
-    private final int injuryAlertHeartRate;
-    private final BigDecimal injuryAlertSpeed;
     private final TrainingSimulationRecorder recorder;
+    private final SimulationAlertPolicy alertPolicy;
 
     public RaceSimulationService(JdbcTemplate db, VetAccess access, VetAudit audit, VetTime time,
-            HorseTrainingGuard trainingGuard, TrainingSimulationRecorder recorder,
-            @Value("${app.head-trainer.injury-alert-heart-rate:220}") int injuryAlertHeartRate,
-            @Value("${app.head-trainer.injury-alert-speed-kmh:74}") BigDecimal injuryAlertSpeed) {
+            HorseTrainingGuard trainingGuard, TrainingSimulationRecorder recorder, SimulationAlertPolicy alertPolicy) {
         this.db = db; this.access = access; this.audit = audit; this.time = time;
         this.trainingGuard = trainingGuard; this.recorder = recorder;
-        this.injuryAlertHeartRate = injuryAlertHeartRate;
-        this.injuryAlertSpeed = injuryAlertSpeed;
+        this.alertPolicy = alertPolicy;
     }
 
     @Transactional
@@ -226,12 +221,17 @@ public class RaceSimulationService {
         for (var horse : horses) horse.put("base_resting_bp",Map.of("systolic",horse.get("base_bp_systolic"),"diastolic",horse.get("base_bp_diastolic")));
         int elapsed = recorder.elapsed(result), duration = ((Number)result.get("duration_seconds")).intValue();
         result.put("simulation_id",id); result.put("horses",horses);
-        result.put("injury_alert_heart_rate",injuryAlertHeartRate); result.put("injury_alert_speed_kmh",injuryAlertSpeed);
+        result.put("alert_thresholds",alertPolicy.thresholds());
         result.put("elapsed_seconds",elapsed); result.put("sampling_interval_seconds",RaceSimulationFormula.cadence(duration));
         result.put("server_time",time.now());
         double progress = elapsed/(double)duration;
         result.put("phase",progress<0.2 ? "Warmup" : progress<0.7 ? "Work" : progress<0.9 ? "Cooldown" : "Recovery");
-        result.put("readings",db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds",VetRows.MAPPER,id));
+        var readings = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds",VetRows.MAPPER,id);
+        result.put("readings",readings);
+        Integer recoveryHeartRate = result.get("recovery_heart_rate") instanceof Number value ? value.intValue() : null;
+        result.put("alerts",horses.size()==1
+                ? alertPolicy.evaluate(horses.getFirst(),readings,recoveryHeartRate,RaceSimulationFormula.cadence(duration))
+                : List.of());
         result.put("results",db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM race_simulation_metrics m"
                 + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? ORDER BY m.lane",VetRows.MAPPER,id));
         return result;
