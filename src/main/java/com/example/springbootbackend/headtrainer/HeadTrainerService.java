@@ -77,6 +77,63 @@ public class HeadTrainerService {
         return Map.of("data",rows);
     }
 
+    public Map<String,Object> standardDiets(String email) {
+        requireTrainer(email);
+        var rows = db.query("SELECT d.id,d.horse_id,h.horse_name,d.feed_type,d.quantity_kg,d.feeding_frequency,"
+                + "d.special_instructions,d.effective_date,d.end_date,d.diet_type,d.created_at,d.updated_at "
+                + "FROM diet_records d JOIN horses h ON h.id=d.horse_id WHERE d.diet_type='STANDARD' "
+                + "AND (d.end_date IS NULL OR d.end_date>=?) ORDER BY h.horse_name,d.effective_date DESC,d.id",
+                VetRows.MAPPER, time.today());
+        return Map.of("data", rows);
+    }
+
+    @Transactional
+    public Map<String,Object> saveStandardDiet(String email,String ip,String horseId,String dietId,JsonNode body) {
+        long trainerId = requireTrainer(email);
+        Map<String,Object> old = new LinkedHashMap<>();
+        if (dietId != null) {
+            var rows = db.query("SELECT id,horse_id,feed_type,quantity_kg,feeding_frequency,special_instructions,"
+                    + "effective_date,end_date,diet_type FROM diet_records WHERE id=? FOR UPDATE", VetRows.MAPPER, dietId);
+            if (rows.isEmpty()) throw new VetException(404,"DIET_NOT_FOUND","Không tìm thấy khẩu phần");
+            old = rows.getFirst();
+            if (!"STANDARD".equals(old.get("diet_type"))) throw new VetException(403,"FORBIDDEN","Khẩu phần điều trị do Veterinarian quản lý");
+            horseId = old.get("horse_id").toString();
+        }
+        access.requireHorse(horseId,true);
+        var patch = VetInput.parse(body,"feed_type:100","quantity_kg:number","feeding_frequency:50",
+                "special_instructions:0","effective_date:date","end_date:date");
+        if (dietId == null) patch.putIfAbsent("effective_date",time.today());
+        Map<String,Object> merged = new LinkedHashMap<>(old);
+        merged.putAll(patch);
+        VetInput.required(merged,"feed_type","quantity_kg","effective_date");
+        VetInput.number(merged,"quantity_kg","0.01","9999.99",2);
+        VetInput.dates(merged,"effective_date","end_date");
+        String where = " WHERE diet_type='STANDARD' AND horse_id=? AND lower(trim(feed_type))=lower(?) "
+                + "AND (end_date IS NULL OR end_date>=?)";
+        var args = new ArrayList<Object>(List.of(horseId,merged.get("feed_type"),merged.get("effective_date")));
+        if (merged.get("end_date") != null) { where += " AND (effective_date IS NULL OR effective_date<=?)"; args.add(merged.get("end_date")); }
+        if (dietId != null) { where += " AND id<>?"; args.add(dietId); }
+        if (db.queryForObject("SELECT count(*) FROM diet_records"+where,Long.class,args.toArray()) > 0)
+            throw new VetException(409,"DIET_OVERLAP","Khẩu phần cùng loại bị trùng thời gian");
+        if (dietId == null) {
+            dietId = UUID.randomUUID().toString();
+            db.update("INSERT INTO diet_records(id,horse_id,doctor_id,feed_type,quantity_kg,feeding_frequency,special_instructions,"
+                    + "effective_date,end_date,diet_type,created_at) VALUES (?,?,?,?,?,?,?,?,?,'STANDARD',?)",
+                    dietId,horseId,trainerId,merged.get("feed_type"),merged.get("quantity_kg"),merged.get("feeding_frequency"),
+                    merged.get("special_instructions"),merged.get("effective_date"),merged.get("end_date"),time.utcNow());
+            audit.record(trainerId,ip,"APPROVE_STANDARD_DIET:"+dietId);
+        } else {
+            db.update("UPDATE diet_records SET feed_type=?,quantity_kg=?,feeding_frequency=?,special_instructions=?,"
+                    + "effective_date=?,end_date=?,updated_at=? WHERE id=?",
+                    merged.get("feed_type"),merged.get("quantity_kg"),merged.get("feeding_frequency"),
+                    merged.get("special_instructions"),merged.get("effective_date"),merged.get("end_date"),time.utcNow(),dietId);
+            audit.record(trainerId,ip,"UPDATE_STANDARD_DIET:"+dietId);
+        }
+        return db.query("SELECT d.id,d.horse_id,h.horse_name,d.feed_type,d.quantity_kg,d.feeding_frequency,"
+                + "d.special_instructions,d.effective_date,d.end_date,d.diet_type,d.created_at,d.updated_at "
+                + "FROM diet_records d JOIN horses h ON h.id=d.horse_id WHERE d.id=?",VetRows.MAPPER,dietId).getFirst();
+    }
+
     @Transactional
     public Map<String,Object> submitIncidentResult(String email,String ip,UUID incidentId,JsonNode body) {
         long trainerId = requireTrainer(email);

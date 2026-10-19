@@ -124,7 +124,7 @@ public class GroomHorseService {
         long groomId = access.requireRole(email, "GROOM");
         requireAssignedHorse(groomId, horseId.toString());
         LocalDate date = activeOn == null ? time.today() : activeOn;
-        return db.query("SELECT id,feed_type,quantity_kg,feeding_frequency,special_instructions,"
+        return db.query("SELECT id,diet_type,feed_type,quantity_kg,feeding_frequency,special_instructions,"
                         + "effective_date,end_date FROM diet_records WHERE horse_id=? "
                         + "AND effective_date<=? AND (end_date IS NULL OR end_date>=?) "
                         + "ORDER BY feed_type,id",

@@ -44,6 +44,24 @@ public class HeadTrainerController {
         return service.stableIncidents(user.getName());
     }
 
+    @GetMapping("/head-trainer/diet-records")
+    public Map<String,Object> standardDiets(Principal user) {
+        return service.standardDiets(user.getName());
+    }
+
+    @PostMapping("/horses/{horseId}/standard-diet-records")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String,Object> createStandardDiet(Principal user,HttpServletRequest request,
+            @PathVariable UUID horseId,@RequestBody JsonNode body) {
+        return service.saveStandardDiet(user.getName(),request.getRemoteAddr(),horseId.toString(),null,body);
+    }
+
+    @PatchMapping("/head-trainer/diet-records/{id}")
+    public Map<String,Object> updateStandardDiet(Principal user,HttpServletRequest request,
+            @PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.saveStandardDiet(user.getName(),request.getRemoteAddr(),null,id.toString(),body);
+    }
+
     @PatchMapping("/head-trainer/stable-incidents/{id}/result")
     public Map<String,Object> submitIncidentResult(Principal user,HttpServletRequest request,
             @PathVariable UUID id,@RequestBody JsonNode body) {

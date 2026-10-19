@@ -8,6 +8,7 @@ import com.example.springbootbackend.clubmanager.dto.RoleChangeActionRequest;
 import com.example.springbootbackend.clubmanager.dto.UpdateUserRoleRequest;
 import com.example.springbootbackend.clubmanager.dto.UserApprovalResponse;
 import com.example.springbootbackend.clubmanager.service.ClubManagerService;
+import com.example.springbootbackend.inventory.InventoryService;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -27,9 +28,11 @@ import java.util.UUID;
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class ClubManagerController {
     private final ClubManagerService service;
+    private final InventoryService inventory;
 
-    public ClubManagerController(ClubManagerService service) {
+    public ClubManagerController(ClubManagerService service, InventoryService inventory) {
         this.service = service;
+        this.inventory = inventory;
     }
 
     @GetMapping("/users/pending")
@@ -109,28 +112,55 @@ public class ClubManagerController {
 
     @GetMapping("/inventory-items")
     public Map<String,Object> inventoryItems(Principal principal) {
-        return service.inventoryItems(principal.getName());
+        return inventory.managerItems(principal.getName());
+    }
+
+    @GetMapping("/inventory-items/{id}")
+    public Map<String,Object> inventoryItem(Principal principal,@PathVariable UUID id) {
+        return inventory.managerItemDetail(principal.getName(),id);
     }
 
     @PostMapping("/inventory-items")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String,Object> createInventoryItem(Principal principal,HttpServletRequest request,@RequestBody JsonNode body) {
-        return service.createInventoryItem(principal.getName(),request.getRemoteAddr(),body);
+        return inventory.createItem(principal.getName(),request.getRemoteAddr(),body);
     }
 
     @PatchMapping("/inventory-items/{id}")
     public Map<String,Object> updateInventoryItem(Principal principal,HttpServletRequest request,@PathVariable UUID id,@RequestBody JsonNode body) {
-        return service.updateInventoryItem(principal.getName(),request.getRemoteAddr(),id,body);
+        return inventory.updateItem(principal.getName(),request.getRemoteAddr(),id,body);
+    }
+
+    @PostMapping("/inventory-items/{id}/receipts")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String,Object> receiveInventory(Principal principal,HttpServletRequest request,@PathVariable UUID id,@RequestBody JsonNode body) {
+        return inventory.receive(principal.getName(),request.getRemoteAddr(),id,body);
+    }
+
+    @PostMapping("/inventory-items/{id}/adjustments")
+    public Map<String,Object> adjustInventory(Principal principal,HttpServletRequest request,@PathVariable UUID id,@RequestBody JsonNode body) {
+        return inventory.adjust(principal.getName(),request.getRemoteAddr(),id,body);
+    }
+
+    @PatchMapping("/inventory-items/{id}/deactivate")
+    public Map<String,Object> deactivateInventory(Principal principal,HttpServletRequest request,@PathVariable UUID id) {
+        return inventory.deactivate(principal.getName(),request.getRemoteAddr(),id);
+    }
+
+    @GetMapping("/inventory-transactions")
+    public Map<String,Object> inventoryTransactions(Principal principal,@RequestParam(required=false) UUID itemId,
+            @RequestParam(defaultValue="50") int limit) {
+        return inventory.transactions(principal.getName(),true,itemId,limit);
     }
 
     @GetMapping("/supply-requests")
     public Map<String,Object> supplyRequests(Principal principal,@RequestParam(defaultValue="Pending") String status) {
-        return service.supplyRequests(principal.getName(),status);
+        return inventory.supplyRequests(principal.getName(),true,status);
     }
 
     @PatchMapping("/supply-requests/{id}")
     public Map<String,Object> reviewSupplyRequest(Principal principal,HttpServletRequest request,@PathVariable UUID id,@RequestBody JsonNode body) {
-        return service.reviewSupplyRequest(principal.getName(),request.getRemoteAddr(),id,body);
+        return inventory.reviewSupplyRequest(principal.getName(),request.getRemoteAddr(),id,body);
     }
 
     @GetMapping("/grooms")
