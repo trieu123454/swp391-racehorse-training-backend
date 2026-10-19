@@ -1,6 +1,7 @@
 package com.example.springbootbackend.clubmanager.exception;
 
 import com.example.springbootbackend.clubmanager.controller.ClubManagerController;
+import com.example.springbootbackend.veterinarian.support.VetException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,6 +12,11 @@ import java.util.Map;
 
 @RestControllerAdvice(assignableTypes = ClubManagerController.class)
 public class ClubManagerExceptionHandler {
+    @ExceptionHandler(VetException.class)
+    ResponseEntity<?> inventoryBusiness(VetException exception) {
+        return ResponseEntity.status(exception.status()).body(exception.body());
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Map<String, String>> business(ResponseStatusException exception) {
         return ResponseEntity.status(exception.getStatusCode())

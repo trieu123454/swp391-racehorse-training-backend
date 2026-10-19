@@ -34,7 +34,27 @@ public class HorseController {
         return horses.list(horses.actor(principal.getName(),false),search,breed,currentStatus != null ? currentStatus : status,stable,locked,actualPage,actualSize);
     }
     @GetMapping("/{id}")
-    public Map<String,Object> detail(Principal p,@PathVariable UUID id) { return horses.detail(horses.actor(p.getName(),false),id); }
+    public Map<String,Object> detail(Principal p,@PathVariable UUID id) {
+        HorseService.Actor actor=horses.actor(p.getName(),false);
+        Map<String,Object> horse=horses.detail(actor,id);
+        if(Set.of("CLUB_MANAGER","HORSE_OWNER").contains(actor.role())) {
+            List<Map<String,Object>> documents=new ArrayList<>();
+            for(Map<String,Object> document:horses.approvedRegistrationDocuments(actor,id)) {
+                Map<String,Object> item=new LinkedHashMap<>(document);
+                String path=Objects.toString(item.remove("object_path"),null);
+                Map<String,Object> signed=storage.signedUrl(path);
+                Map<String,Object> download=storage.signedUrl(path,Objects.toString(item.get("name"),"giay-to.pdf"));
+                item.put("url",signed.get("url"));
+                item.put("download_url",download.get("url"));
+                item.put("expires_in",signed.get("expiresIn"));
+                documents.add(item);
+            }
+            horse.put("registration_documents",documents);
+        }
+        return horse;
+    }
+    @GetMapping("/{id}/ownership-history")
+    public List<Map<String,Object>> ownershipHistory(Principal p,@PathVariable UUID id) { return horses.ownershipHistory(horses.actor(p.getName(),true),id); }
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String,Object> create(Principal p,@Valid @RequestBody HorseRequest r) { return horses.save(horses.actor(p.getName(),true),null,r); }

@@ -30,7 +30,7 @@ class HorseStorageTests {
             var time=mock(VetTime.class);
             var uploadedAt=java.time.LocalDateTime.of(2026,10,6,3,0);
             when(time.utcNow()).thenReturn(uploadedAt);
-            var storage=new HorseStorage("http://127.0.0.1:"+server.getAddress().getPort(),"test-secret","horse-images",db,new ObjectMapper(),time);
+            var storage=new HorseStorage("http://127.0.0.1:"+server.getAddress().getPort(),"test-secret","horse-images","supabase","","","",db,new ObjectMapper(),time);
             byte[] png=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
             var result=storage.upload(new MockMultipartFile("file","horse.png","image/png",png),7L);
             String path=(String)result.get("imagePath");

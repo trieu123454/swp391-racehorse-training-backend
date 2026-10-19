@@ -103,6 +103,19 @@ public class HorseService {
         return horse;
     }
 
+    public List<Map<String,Object>> approvedRegistrationDocuments(Actor actor,UUID horseId) {
+        if(!Set.of("CLUB_MANAGER","HORSE_OWNER").contains(actor.role()))
+            throw new ResponseStatusException(FORBIDDEN,"Không có quyền xem giấy tờ sở hữu");
+        detail(actor,horseId);
+        String ownerFilter=actor.role().equals("HORSE_OWNER")?" AND r.owner_id=?":"";
+        List<Object> args=new ArrayList<>();
+        args.add(horseId.toString());
+        if(actor.role().equals("HORSE_OWNER")) args.add(actor.id());
+        return db.queryForList("SELECT d.id,d.original_filename AS name,d.content_type,d.file_size,d.uploaded_at,d.object_path "
+                +"FROM horse_registration_documents d JOIN horse_registration_requests r ON r.id=d.request_id "
+                +"WHERE r.approved_horse_id=? AND r.status='APPROVED'"+ownerFilter+" ORDER BY d.uploaded_at DESC",args.toArray());
+    }
+
     private boolean groomHasAssignment(long groomId,String horseId) {
         LocalDate today=time.today();
         LocalDate from=today.minusDays(groomAssignmentWindowDays);
@@ -146,7 +159,8 @@ public class HorseService {
                 throw new ResponseStatusException(CONFLICT,"Cần xác nhận thay đổi chủ sở hữu");
         }
         if(request.birthYear()!=null && request.birthYear()>time.today().getYear()) throw new ResponseStatusException(BAD_REQUEST,"Năm sinh không được ở tương lai");
-        if(request.ownerId()!=null && db.queryForObject("SELECT count(*) FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' AND u.deleted_at IS NULL",Long.class,request.ownerId())==0)
+        if(request.ownerId()==null) throw new ResponseStatusException(BAD_REQUEST,"Mỗi hồ sơ ngựa cần một chủ sở hữu chính");
+        if(db.queryForObject("SELECT count(*) FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' AND u.deleted_at IS NULL",Long.class,request.ownerId())==0)
             throw new ResponseStatusException(BAD_REQUEST,"Chủ ngựa phải là Horse Owner đã được duyệt");
         // Serialize competing admissions to the same stable; never rely on a dropdown alone.
         var boxes=db.queryForList("SELECT * FROM stable_boxes WHERE id=? FOR UPDATE",request.stableBoxId().toString());
@@ -165,12 +179,36 @@ public class HorseService {
             id=UUID.randomUUID();
             db.update("INSERT INTO horses(id,horse_name,breed,birth_year,height_cm,current_weight_kg,pedigree_father,pedigree_mother,image_url,stable_box_id,owner_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",id.toString(),request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.currentWeightKg(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),time.utcNow());
             audit(actor.id(), "CREATE_HORSE: " + id);
+            if (request.ownerId() != null) ownershipChange(id.toString(), null, request.ownerId(), actor.id(), "INITIAL_ASSIGNMENT");
         } else {
             db.update("UPDATE horses SET horse_name=?,breed=?,birth_year=?,height_cm=?,current_weight_kg=?,pedigree_father=?,pedigree_mother=?,image_url=?,stable_box_id=?,owner_id=? WHERE id=?",request.horseName().trim(),request.breed(),request.birthYear(),request.heightCm(),request.currentWeightKg(),request.pedigreeFather(),request.pedigreeMother(),path,request.stableBoxId().toString(),request.ownerId(),id.toString());
             audit(actor.id(), "UPDATE_HORSE: " + id);
-            if (!Objects.equals(old.get("owner_id"), request.ownerId())) audit(actor.id(), "CHANGE_HORSE_OWNER: " + id);
+            Long oldOwner = ownerId(old.get("owner_id"));
+            if (!Objects.equals(oldOwner, request.ownerId())) {
+                ownershipChange(id.toString(), oldOwner, request.ownerId(), actor.id(), "MANAGER_UPDATE");
+                audit(actor.id(), "CHANGE_HORSE_OWNER: " + id + " " + oldOwner + " -> " + request.ownerId());
+            }
         }
         return detail(actor,id);
+    }
+
+    public List<Map<String,Object>> ownershipHistory(Actor actor, UUID horseId) {
+        if (!actor.role().equals("CLUB_MANAGER")) throw new ResponseStatusException(FORBIDDEN,"Chỉ Club Manager được xem lịch sử sở hữu");
+        if (db.queryForObject("SELECT count(*) FROM horses WHERE id=? AND deleted_at IS NULL",Long.class,horseId.toString())==0)
+            throw new ResponseStatusException(NOT_FOUND,"Không tìm thấy ngựa");
+        return db.queryForList("SELECT h.id,h.previous_owner_id,previous.full_name AS previous_owner_name,h.new_owner_id,current.full_name AS new_owner_name,h.changed_by,manager.full_name AS changed_by_name,h.change_reason,h.changed_at "
+                + "FROM horse_ownership_history h LEFT JOIN users previous ON previous.user_id=h.previous_owner_id "
+                + "LEFT JOIN users current ON current.user_id=h.new_owner_id LEFT JOIN users manager ON manager.user_id=h.changed_by "
+                + "WHERE h.horse_id=? ORDER BY h.changed_at DESC",horseId.toString());
+    }
+
+    private void ownershipChange(String horseId, Long previousOwner, Long newOwner, long changedBy, String reason) {
+        db.update("INSERT INTO horse_ownership_history(id,horse_id,previous_owner_id,new_owner_id,changed_by,change_reason,changed_at) VALUES (?,?,?,?,?,?,?)",
+                UUID.randomUUID().toString(),horseId,previousOwner,newOwner,changedBy,reason,time.utcNow());
+    }
+
+    private static Long ownerId(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
     }
 
     @Transactional

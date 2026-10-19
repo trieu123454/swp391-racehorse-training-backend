@@ -98,6 +98,8 @@ public class MedicalService {
     public Map<String,Object> saveDiet(String email,String ip,String horse,String id,JsonNode body) {
         long actor=access.requireRole(email, "VETERINARIAN");
         Map<String,Object> old=id==null?new LinkedHashMap<>():data.row("diet_records",id,true);
+        if(id!=null && !"TREATMENT".equals(old.get("diet_type")))
+            throw new VetException(403,"FORBIDDEN","Khẩu phần thường do Head Trainer quản lý");
         if(id!=null) horse=old.get("horse_id").toString();
         access.requireHorse(horse,true);
         var patch=VetInput.parse(body,"feed_type:100","quantity_kg:number","feeding_frequency:50","special_instructions:0","effective_date:date","end_date:date");
@@ -111,7 +113,7 @@ public class MedicalService {
         if(data.db.queryForObject("SELECT count(*) FROM diet_records"+where,Long.class,args.toArray())>0)
             throw new VetException(409,"DIET_OVERLAP","Khẩu phần cùng loại bị trùng thời gian");
         if(id==null) {
-            patch.put("horse_id",horse); patch.put("doctor_id",actor); patch.put("created_at",time.utcNow());
+            patch.put("horse_id",horse); patch.put("doctor_id",actor); patch.put("diet_type","TREATMENT"); patch.put("created_at",time.utcNow());
             id=data.insert("diet_records",patch); audit.record(actor,ip,"CREATE_DIET_RECORD:"+id);
         } else {
             patch.put("updated_at",time.utcNow()); data.update("diet_records",id,patch); audit.record(actor,ip,"UPDATE_DIET_RECORD:"+id);

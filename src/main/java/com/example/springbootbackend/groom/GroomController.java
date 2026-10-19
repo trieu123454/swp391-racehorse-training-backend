@@ -1,6 +1,7 @@
 package com.example.springbootbackend.groom;
 
 import com.example.springbootbackend.horse.storage.HorseStorage;
+import com.example.springbootbackend.inventory.InventoryService;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.security.Principal;
@@ -29,11 +30,13 @@ public class GroomController {
     private final GroomWorkspaceService service;
     private final GroomHorseService horses;
     private final HorseStorage storage;
+    private final InventoryService inventory;
 
-    public GroomController(GroomWorkspaceService service, GroomHorseService horses,HorseStorage storage) {
+    public GroomController(GroomWorkspaceService service, GroomHorseService horses,HorseStorage storage,InventoryService inventory) {
         this.service = service;
         this.horses = horses;
         this.storage = storage;
+        this.inventory = inventory;
     }
 
     @GetMapping("/my-horses")
@@ -107,19 +110,30 @@ public class GroomController {
     public Map<String, Object> inventory(Principal user,
             @RequestParam(required = false) String category,
             @RequestParam(name = "low_stock_only", defaultValue = "false") boolean lowStockOnly) {
-        return service.inventory(user.getName(), category, lowStockOnly);
+        return inventory.groomItems(user.getName(), category, lowStockOnly);
     }
 
     @PostMapping("/supply-requests")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> createSupplyRequest(Principal user, HttpServletRequest request,
             @RequestBody JsonNode body) {
-        return service.createSupplyRequest(user.getName(), request.getRemoteAddr(), body);
+        return inventory.createSupplyRequest(user.getName(), request.getRemoteAddr(), body);
     }
 
     @GetMapping("/supply-requests")
     public Map<String, Object> supplyRequests(Principal user, @RequestParam(required = false) String status) {
-        return service.supplyRequests(user.getName(), status);
+        return inventory.supplyRequests(user.getName(), false, status);
+    }
+
+    @PostMapping("/inventory-usage")
+    public Map<String,Object> recordInventoryUsage(Principal user,HttpServletRequest request,@RequestBody JsonNode body) {
+        return inventory.use(user.getName(),request.getRemoteAddr(),body);
+    }
+
+    @GetMapping("/inventory-transactions")
+    public Map<String,Object> inventoryTransactions(Principal user,@RequestParam(required=false) UUID itemId,
+            @RequestParam(defaultValue="50") int limit) {
+        return inventory.transactions(user.getName(),false,itemId,limit);
     }
 
     /** Sanitized compatibility view for the earlier workspace client. */
