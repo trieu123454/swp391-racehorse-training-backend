@@ -23,7 +23,7 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(25);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select table_name from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")) {
@@ -34,7 +34,7 @@ class DatabaseMigrationTests {
                         "training_plans","training_plan_horses","training_plan_logs","training_schedules","training_metrics_logs",
                         "races","horse_race_entries","training_videos","health_exams","health_exam_logs",
                         "medical_records","prescriptions","diet_records","injury_markers","periodic_care_schedules",
-                        "notifications","daily_task_logs","stable_incidents","inventory_items","supply_requests",
+                        "notifications","daily_task_logs","stable_incidents","inventory_items","inventory_lots","inventory_transactions","supply_requests",
                         "financial_reports","audit_logs","horse_image_uploads","calendar_events",
                         "race_simulations","race_simulation_horses","race_simulation_metrics","training_simulation_readings",
                         "horse_registration_requests","horse_registration_documents","horse_ownership_history",
@@ -63,7 +63,7 @@ class DatabaseMigrationTests {
             s.executeUpdate("insert into roles(role_id,role_name) values (1,'HORSE_OWNER'),(2,'GROOM')");
             s.executeUpdate("insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(20);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(24);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();

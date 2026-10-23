@@ -2,15 +2,15 @@ package com.example.springbootbackend.security;
 
 import java.util.List;
 
-import com.example.springbootbackend.auth.entity.AppUser;
-import com.example.springbootbackend.auth.repository.AppUserRepository;
-
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
+
+import com.example.springbootbackend.entity.AppUser;
+import com.example.springbootbackend.repository.AppUserRepository;
 
 @Service
 public class AppUserDetailsService implements UserDetailsService {

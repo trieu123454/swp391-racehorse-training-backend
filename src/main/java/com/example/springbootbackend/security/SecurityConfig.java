@@ -1,22 +1,19 @@
 package com.example.springbootbackend.security;
 
-import javax.crypto.SecretKey;
-import jakarta.servlet.DispatcherType;
-
 import java.util.List;
 
-import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import javax.crypto.SecretKey;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -32,6 +29,10 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.nimbusds.jose.jwk.source.ImmutableSecret;
+
+import jakarta.servlet.DispatcherType;
+
 @Configuration
 @EnableMethodSecurity
 @EnableConfigurationProperties({JwtProperties.class, GoogleProperties.class})
@@ -45,8 +46,8 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, ex) -> {
-                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
-                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 401,
+                            if (VetHttpSecurity.applies(request)) {
+                                VetHttpSecurity.write(response, 401,
                                         "UNAUTHENTICATED", "Vui lòng đăng nhập");
                                 return;
                             }
@@ -55,8 +56,8 @@ public class SecurityConfig {
                             response.getWriter().write("{\"message\":\"Authentication required\"}");
                         })
                         .accessDeniedHandler((request, response, ex) -> {
-                            if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
-                                com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                            if (VetHttpSecurity.applies(request)) {
+                                VetHttpSecurity.write(response, 403,
                                         "FORBIDDEN", "Tài khoản không được phép truy cập");
                                 return;
                             }
@@ -64,7 +65,6 @@ public class SecurityConfig {
                         }))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Preserve the original error status on the container's internal error dispatch.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/auth/me", "/api/auth/users/**", "/api/auth/change-password").authenticated()
                         .requestMatchers(
