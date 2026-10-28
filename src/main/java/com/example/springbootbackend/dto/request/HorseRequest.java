@@ -23,6 +23,8 @@ public record HorseRequest(
         @JsonProperty("currentWeightKg") @JsonAlias("current_weight_kg") @DecimalMin("100.0") @DecimalMax("900.0") @Digits(integer = 3, fraction = 2) BigDecimal currentWeightKg,
         @Size(max = 100) String pedigreeFather,
         @Size(max = 100) String pedigreeMother,
+        @JsonAlias("microchip_number") @Size(max = 100) String microchipNumber,
+        @JsonAlias("passport_number") @Size(max = 100) String passportNumber,
         @JsonAlias("image_url") @Size(max = 512) String imagePath,
         @JsonAlias("stable_box_id") @NotNull UUID stableBoxId,
         @JsonAlias("owner_id") @Positive Long ownerId,

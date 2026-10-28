@@ -53,13 +53,28 @@ public class HorseRegistrationRequest {
     @Column(name = "passport_number", length = 100)
     private String passportNumber;
 
+    @Column(name = "revision_no", nullable = false)
+    private Integer revisionNo = 1;
+
+    @Column(name = "transfer_consent")
+    private Boolean transferConsent;
+
+    @Column(name = "transfer_consent_by")
+    private Long transferConsentBy;
+
+    @Column(name = "transfer_consent_at")
+    private LocalDateTime transferConsentAt;
+
+    @Column(name = "transfer_consent_note", columnDefinition = "TEXT")
+    private String transferConsentNote;
+
     @Column(name = "owner_note", columnDefinition = "TEXT")
     private String ownerNote;
 
     @Column(name = "horse_image_path", length = 512)
     private String horseImagePath;
 
-    @Column(name = "status", nullable = false, length = 20)
+    @Column(name = "status", nullable = false, length = 32)
     private String status = "PENDING";
 
     @JdbcTypeCode(SqlTypes.CHAR)
@@ -172,6 +187,46 @@ public class HorseRegistrationRequest {
 
     public void setPassportNumber(String passportNumber) {
         this.passportNumber = passportNumber;
+    }
+
+    public Integer getRevisionNo() {
+        return revisionNo;
+    }
+
+    public void setRevisionNo(Integer revisionNo) {
+        this.revisionNo = revisionNo;
+    }
+
+    public Boolean getTransferConsent() {
+        return transferConsent;
+    }
+
+    public void setTransferConsent(Boolean transferConsent) {
+        this.transferConsent = transferConsent;
+    }
+
+    public Long getTransferConsentBy() {
+        return transferConsentBy;
+    }
+
+    public void setTransferConsentBy(Long transferConsentBy) {
+        this.transferConsentBy = transferConsentBy;
+    }
+
+    public LocalDateTime getTransferConsentAt() {
+        return transferConsentAt;
+    }
+
+    public void setTransferConsentAt(LocalDateTime transferConsentAt) {
+        this.transferConsentAt = transferConsentAt;
+    }
+
+    public String getTransferConsentNote() {
+        return transferConsentNote;
+    }
+
+    public void setTransferConsentNote(String transferConsentNote) {
+        this.transferConsentNote = transferConsentNote;
     }
 
     public String getOwnerNote() {

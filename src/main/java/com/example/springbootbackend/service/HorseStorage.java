@@ -97,7 +97,7 @@ public class HorseStorage {
     }
 
     public String uploadRegistrationHorseImage(MultipartFile file, long actor) {
-        if (file == null || file.isEmpty()) throw new ResponseStatusException(BAD_REQUEST, "Cần tải ảnh ngựa lên");
+        if (file == null || file.isEmpty()) return null;
         return (String) upload(file, actor, "horses").get("imagePath");
     }
 

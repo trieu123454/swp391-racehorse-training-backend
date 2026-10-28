@@ -1,24 +1,26 @@
-# Flow 1 — Backend API
+# Flow 1 — Horse Profile & Pedigree Management
 
-Storage is Supabase, replacing Firebase by agreement. All endpoints require the existing Bearer access token and an APPROVED, non-deleted account. Database user IDs remain numbers; horse/stable IDs are UUID strings.
+All endpoints require a Bearer token and an approved, non-deleted account. Horse and stable IDs are UUID strings; user IDs are numeric. Registration is owner-submitted and manager-reviewed. `POST /api/horses` remains only as a compatibility route and returns 403; it cannot create a horse directly.
 
-| Method | Endpoint | Permission / behavior |
+## Registration requests
+
+| Method | Endpoint | Actor and behavior |
 | --- | --- | --- |
-| GET | `/api/horses?page=0&size=20` | Manager/trainer: all active horses; owner: own horses only |
-| GET | `/api/horses/{id}` | Same visibility; another owner's horse returns 403 |
-| POST | `/api/horses` | Manager; create (201) |
-| PUT | `/api/horses/{id}` | Manager; update basic profile |
-| GET | `/api/horses/options/stables` | Manager; available boxes with free capacity |
-| GET | `/api/horses/options/owners?q=tri&page=0&size=20` | Manager; server-side owner search by name, email, phone, or owner ID; maximum 50 results per page |
-| GET | `/api/horses/{id}/deletion-warnings` | Manager; training and medical counts |
-| DELETE | `/api/horses/{id}?confirmed=true` | Manager; soft delete (204) |
-| POST | `/api/horses/images` | Manager; multipart field `file`, returns `imagePath` (201) |
-| GET | `/api/horses/{id}/image` | Authorized viewer; signed URL valid 300 seconds, or `hasImage:false` |
+| GET | `/api/horse-owner/horse-registration-requests` | Horse Owner; own requests, documents, history, and current status only |
+| POST | `/api/horse-owner/horse-registration-requests` | Horse Owner; submit `REGISTER` or `LINK` request as multipart |
+| PATCH | `/api/horse-owner/horse-registration-requests/{id}` | Requesting Horse Owner; correct a `NEEDS_INFORMATION` request and resubmit it |
+| GET | `/api/club-manager/horse-registration-requests` | Club Manager; pending requests and supporting files |
+| PATCH | `/api/club-manager/horse-registration-requests/{id}` | Club Manager; approve, request more information, or reject a pending request |
+| GET | `/api/horse-owner/ownership-transfer-requests` | Current Horse Owner; requests awaiting their consent for a horse they currently own |
+| PATCH | `/api/horse-owner/ownership-transfer-requests/{id}/consent` | Current Horse Owner only; `CONSENT` finalizes transfer or `DECLINE` rejects it |
 
-Optional list filters (manager/trainer only): `search` (literal case-insensitive substring), `breed`, `currentStatus`, `stableBoxId`, `isTrainingLocked`. Filters combine with AND. Maximum page size 100. List response: `{items,total,page,size}`. Horse and option records use database snake_case keys; request fields use camelCase below.
+The multipart `POST` and correction `PATCH` contain a JSON `request` part, optional `horseImage`, zero or more `documents`, and an optional JSON `documentTypes` array aligned by file order. Initial submissions require one to five supporting documents; current requirements do not specify that a particular document category is mandatory. Categories are `OWNERSHIP_PROOF`, `HORSE_CERTIFICATE`, `HEALTH_DOCUMENT`, and `OTHER` and help manager review. Each document is at most 10 MiB and must pass private storage MIME/signature validation. Horse images are optional; when provided, they must pass the existing JPG/JPEG, PNG, or WebP check and be at most 5 MiB. A correction may retain existing files and add up to five files.
+
+Request body fields:
 
 ```json
 {
+  "requestType": "REGISTER",
   "horseName": "Thunder",
   "breed": "Thoroughbred",
   "birthYear": 2020,
@@ -26,23 +28,42 @@ Optional list filters (manager/trainer only): `search` (literal case-insensitive
   "currentWeightKg": 452.0,
   "pedigreeFather": "Sire",
   "pedigreeMother": "Dam",
-  "stableBoxId": "00000000-0000-0000-0000-000000000001",
-  "ownerId": 17,
-  "imagePath": null,
-  "confirmOwnerChange": false
+  "microchipNumber": "982000000000001",
+  "passportNumber": "PASS-001",
+  "ownerNote": "Supporting context"
 }
 ```
 
-Stable selection is required. Height (`heightCm`, centimeters) and current weight (`currentWeightKg`, kilograms) are optional and maintained with the basic horse profile. The horse detail response includes the latest recorded training metric weight when available, falling back to `horses.current_weight_kg`. Head Trainer metric entry updates that current value. Owner/image and pedigree are optional. Update sends the full editable profile; null/omitted imagePath retains the existing image. Changing/removing the owner requires confirmOwnerChange=true (otherwise 409). Operational fields are never written from this request. Capacity admissions lock the stable row transactionally. No stable creation endpoint is included in Flow 1; populate the stable catalog through its management flow or controlled database setup.
+`horseName` and one or more supporting documents are required. Breed, birth year, height, weight, pedigree names, microchip, passport, image, and owner note are optional. A supplied birth year cannot be before 1900 or after the current year; height and weight are range/precision validated. Microchip and passport values must be unique case-insensitively across active horses and active `REGISTER` requests. Sex, full date of birth, coat color, and a separate registry number are not defined by current requirements or schema and are not collected.
 
-Owner lookup returns `{items, hasMore, page, size}` and does not return the full owner directory. Enter at least three characters to search name, email, or phone; a numeric owner ID (also accepted as `#123`) can be searched directly. Each result includes its unique email and owner ID so same-name owners can be distinguished. PostgreSQL trigram indexes support substring search at larger directory sizes.
+Request statuses: `PENDING` → `NEEDS_INFORMATION` → `PENDING` (new revision), `PENDING` → `APPROVED` or `REJECTED`; a `LINK` request reviewed for a horse with a different current owner goes to `AWAITING_OWNER_CONSENT`, then to `APPROVED` on current-owner consent or `REJECTED` on decline. Rejection is terminal. A manager must include a note when requesting information or rejecting. A current owner cannot consent to a request for a horse they no longer own. Only the requesting owner may resubmit; request type and requester cannot change.
 
-Upload accepts JPG/JPEG, PNG, WebP <=5 MiB and checks extension, MIME and binary signature. Backend uses an API secret in the `apikey` header (never exposed to clients). Bucket remains private. The uploaded path is recorded against the uploader to reject arbitrary paths on create/update; DB image_url contains this permanent path, not an expiring URL. Upload errors do not modify the horse. Previous/orphaned images are retained per use case. Signed links already issued remain usable until their five-minute expiry, including after ownership changes/deletion.
+For `APPROVE` of a `REGISTER` request, body includes `stableBoxId`; the server locks the box, checks active status/capacity, creates the horse, copies profile, pedigree, microchip/passport and image, sets the request owner, records ownership history and audit, then notifies the owner. For `APPROVE` of a `LINK`, body includes `horseId`; identifiers supplied must match the selected profile when already present. An unowned horse or same-owner link is approved directly. For another owner’s horse, manager approval only starts the consent step: no profile owner or identity changes until the current owner consents. A horse can have only one transfer request awaiting consent at a time.
 
-Frontend integration: preview selected image locally, show upload progress, retain form on failure, allow saving without an image (or with the old one on edit). Only send returned imagePath after a successful upload. Request each authorized horse image endpoint for a fresh URL and use a placeholder on absent/error. Display confirmation before owner change/delete; redirect to the list with a message after detail 403. These UI behaviors are not implemented by the backend APIs.
+## Profiles, pedigree, and records
 
-Medical records currently have no open/closed status. Deletion warnings therefore expose total medicalRecords and activePrescriptions separately, plus scheduledTraining (Scheduled/InProgress). No fabricated open-status column is used. Soft delete retains all related records and storage objects. Flow 5 race history is deferred until Flow 5 is implemented.
+| Method | Endpoint | Permission / behavior |
+| --- | --- | --- |
+| GET | `/api/horses?page=0&size=20` | Manager/Head Trainer/Veterinarian: all active horses; Groom: assigned horses in the configured work window; owner: own horses only |
+| GET | `/api/horses/{id}` | Same record scope; another owner receives 403 |
+| POST | `/api/horses` | Club Manager route retained but disabled with 403; use reviewed owner registration |
+| PUT | `/api/horses/{id}` | Club Manager updates basic profile, pedigree, stable, identity identifiers, and image; changing owner returns 409 |
+| GET | `/api/horses/{id}/ownership-history` | Club Manager only |
+| GET | `/api/horses/options/stables` | Authenticated user; available boxes with free capacity |
+| GET | `/api/horses/options/owners?q=tri&page=0&size=20` | Club Manager; legacy paged owner lookup; does not authorize owner changes |
+| GET | `/api/horses/{id}/deletion-warnings` | Club Manager; training and medical counts |
+| DELETE | `/api/horses/{id}?confirmed=true` | Club Manager; soft delete |
+| POST | `/api/horses/images` | Club Manager; multipart `file`, returns private `imagePath` |
+| GET | `/api/horses/{id}/image` | Authorized profile viewer; signed URL, or `hasImage:false` |
 
-Migrations V4/V5 add a private upload registry; existing auth tables and role model stay intact. Configure application-local.properties using the example; start with `mvn spring-boot:run` to migrate. Run `mvn test` for regression tests. Swagger: `/swagger-ui/index.html`.
+Profile `horseName` is required. Breed, birth year, height, weight, pedigree, image, microchip, and passport are optional. For `REGISTER`, profile owner is set to the submitting Horse Owner and is not client-selectable; legacy/unassigned profiles may still have no owner. Stable is selected by the manager for a new registration and is required on an existing profile update. Pedigree is represented by the optional father and mother names; there is no separate pedigree-document or ancestry graph model. Managers can correct approved profile fields; owners have read-only profile access and can only edit a pending request returned for information. Ownership changes use `LINK` plus current-owner consent, never the profile update endpoint. The database has one `owner_id`; co-ownership is not supported.
 
-Storage API reference: https://supabase.com/docs/reference/self-hosting-storage/introduction
+Optional list filters for managers/trainers: `search`, `breed`, `currentStatus`, `stableBoxId`, and `isTrainingLocked` (AND-combined, maximum page size 100). Horse data uses database snake_case keys. Updates are full profile payloads; null/omitted image retains the existing image. Existing operational health/training fields are not written by profile updates. New horse admission and stable-capacity checks run transactionally with row locks. No stable creation endpoint is part of Flow 1.
+
+Horse image and registration documents use private storage. Database rows store permanent object paths; clients receive short-lived signed links from authorized endpoints. Supabase credentials remain server-side. Upload failures must not create a persisted request/profile. Audit and request history retain submission, correction, review, and consent decisions; document rows carry revision and category.
+
+## Existing profile API notes
+
+Owner lookup returns `{items, hasMore, page, size}` and does not expose the full directory. Enter at least three characters for name/email/phone search; numeric owner ID (also `#123`) can be searched directly. PostgreSQL trigram indexes support substring lookup. Medical records do not currently have an open/closed status; soft delete retains related records and storage objects. Flow 5 race history remains deferred.
+
+Migrations are additive; do not edit applied migrations. Configure local storage credentials outside source control, run `mvn spring-boot:run` to migrate, and `mvn test` for backend checks. Swagger: `/swagger-ui/index.html`.

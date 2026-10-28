@@ -38,6 +38,12 @@ public class Horse {
     @Column(name = "pedigree_mother", length = 100)
     private String pedigreeMother;
 
+    @Column(name = "microchip_number", length = 100)
+    private String microchipNumber;
+
+    @Column(name = "passport_number", length = 100)
+    private String passportNumber;
+
     @Column(name = "image_url", length = 512)
     private String imageUrl;
 
@@ -126,6 +132,22 @@ public class Horse {
 
     public void setPedigreeMother(String pedigreeMother) {
         this.pedigreeMother = pedigreeMother;
+    }
+
+    public String getMicrochipNumber() {
+        return microchipNumber;
+    }
+
+    public void setMicrochipNumber(String microchipNumber) {
+        this.microchipNumber = microchipNumber;
+    }
+
+    public String getPassportNumber() {
+        return passportNumber;
+    }
+
+    public void setPassportNumber(String passportNumber) {
+        this.passportNumber = passportNumber;
     }
 
     public String getImageUrl() {

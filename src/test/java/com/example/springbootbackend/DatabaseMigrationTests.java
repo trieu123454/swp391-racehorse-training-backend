@@ -23,7 +23,7 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(25);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(26);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select table_name from information_schema.tables where table_schema='public' and table_type='BASE TABLE'")) {
@@ -38,10 +38,19 @@ class DatabaseMigrationTests {
                         "financial_reports","audit_logs","horse_image_uploads","calendar_events",
                         "race_simulations","race_simulation_horses","race_simulation_metrics","training_simulation_readings",
                         "horse_registration_requests","horse_registration_documents","horse_ownership_history",
+                        "horse_registration_request_history","horse_identity_lock",
                         "flyway_schema_history");
             }
             try (var rs = s.executeQuery("select numeric_scale from information_schema.columns where table_schema='public' and table_name='race_simulation_horses' and column_name='base_max_speed_kmh'")) {
                 assertThat(rs.next()).isTrue(); assertThat(rs.getInt(1)).isEqualTo(4);
+            }
+            try (var rs = s.executeQuery("select character_maximum_length from information_schema.columns where table_schema='public' and table_name='horse_registration_requests' and column_name='status'")) {
+                assertThat(rs.next()).isTrue(); assertThat(rs.getInt(1)).isEqualTo(32);
+            }
+            for (String identityColumn : new String[]{"microchip_number", "passport_number"}) {
+                try (var rs = s.executeQuery("select count(*) from information_schema.columns where table_schema='public' and table_name='horses' and column_name='" + identityColumn + "'")) {
+                    rs.next(); assertThat(rs.getInt(1)).isEqualTo(1);
+                }
             }
             s.executeUpdate("insert into horses(id, horse_name) values ('00000000-0000-0000-0000-000000000001', 'Thunder')");
             try (var rs = s.executeQuery("select * from horses")) {
@@ -63,7 +72,7 @@ class DatabaseMigrationTests {
             s.executeUpdate("insert into roles(role_id,role_name) values (1,'HORSE_OWNER'),(2,'GROOM')");
             s.executeUpdate("insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(24);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(25);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();

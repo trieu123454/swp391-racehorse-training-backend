@@ -2,10 +2,19 @@ package com.example.springbootbackend.service;
 
 import com.example.springbootbackend.dto.request.HorseRequest;
 import com.example.springbootbackend.dto.request.HorseUpdateRequest;
+import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
+import com.example.springbootbackend.entity.Horse;
 import com.example.springbootbackend.entity.HorseOwnershipHistory;
+import com.example.springbootbackend.entity.UserStatus;
+import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
+import com.example.springbootbackend.repository.HorseImageUploadRepository;
+import com.example.springbootbackend.repository.HorseIdentityLockRepository;
+import com.example.springbootbackend.repository.HorseRegistrationRequestRepository;
+import com.example.springbootbackend.repository.HorseRepository;
 import com.example.springbootbackend.repository.HorseOwnershipHistoryRepository;
+import com.example.springbootbackend.repository.StableBoxRepository;
 
 import java.time.LocalDateTime;
 import java.time.LocalDate;
@@ -23,26 +32,44 @@ public class HorseService {
     private final int groomAssignmentWindowDays;
     private final HorseOwnershipHistoryRepository ownershipHistoryRepository;
     private final AuditLogRepository auditLogRepository;
+    private final HorseRepository horseRepository;
+    private final HorseRegistrationRequestRepository registrationRequestRepository;
+    private final AppUserRepository userRepository;
+    private final StableBoxRepository stableBoxRepository;
+    private final HorseImageUploadRepository horseImageUploadRepository;
+    private final HorseIdentityLockRepository identityLockRepository;
 
     public HorseService(VetData db, VetTime time,
             @Value("${app.groom.assignment-window-days:14}") int groomAssignmentWindowDays,
             HorseOwnershipHistoryRepository ownershipHistoryRepository,
-            AuditLogRepository auditLogRepository) {
+            AuditLogRepository auditLogRepository,
+            HorseRepository horseRepository,
+            HorseRegistrationRequestRepository registrationRequestRepository,
+            AppUserRepository userRepository,
+            StableBoxRepository stableBoxRepository,
+            HorseImageUploadRepository horseImageUploadRepository,
+            HorseIdentityLockRepository identityLockRepository) {
         this.db = db;
         this.time = time;
         this.groomAssignmentWindowDays = Math.max(0, groomAssignmentWindowDays);
         this.ownershipHistoryRepository = ownershipHistoryRepository;
         this.auditLogRepository = auditLogRepository;
+        this.horseRepository = horseRepository;
+        this.registrationRequestRepository = registrationRequestRepository;
+        this.userRepository = userRepository;
+        this.stableBoxRepository = stableBoxRepository;
+        this.horseImageUploadRepository = horseImageUploadRepository;
+        this.identityLockRepository = identityLockRepository;
     }
 
     public record Actor(long id, String role) {}
 
     public Actor actor(String email, boolean write) {
-        var rows = db.queryForList("SELECT u.user_id,u.must_change_password,r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id WHERE lower(u.email)=lower(?) AND u.status='APPROVED' AND u.deleted_at IS NULL", email);
-        if (rows.isEmpty()) throw new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt");
-        var row = rows.getFirst();
-        var actor = new Actor(((Number) row.get("user_id")).longValue(), (String) row.get("role_name"));
-        if (Boolean.TRUE.equals(row.get("must_change_password"))) throw new ResponseStatusException(FORBIDDEN, "Change password before using business APIs");
+        AppUser user = userRepository.findByEmailIgnoreCase(email)
+                .filter(value -> value.getStatus() == UserStatus.APPROVED && value.getDeletedAt() == null)
+                .orElseThrow(() -> new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt"));
+        Actor actor = new Actor(user.getId(), user.getRole().getName());
+        if (user.isMustChangePassword()) throw new ResponseStatusException(FORBIDDEN, "Change password before using business APIs");
         if (write ? !actor.role().equals("CLUB_MANAGER") : !Set.of("CLUB_MANAGER", "HEAD_TRAINER", "VETERINARIAN", "GROOM", "HORSE_OWNER").contains(actor.role()))
             throw new ResponseStatusException(FORBIDDEN, "Không có quyền truy cập");
         return actor;
@@ -122,7 +149,7 @@ public class HorseService {
         List<Object> args = new ArrayList<>();
         args.add(horseId.toString());
         if (actor.role().equals("HORSE_OWNER")) args.add(actor.id());
-        return db.queryForList("SELECT d.id,d.original_filename AS name,d.content_type,d.file_size,d.uploaded_at,d.object_path "
+        return db.queryForList("SELECT d.id,d.original_filename AS name,d.content_type,d.file_size,d.document_type,d.revision_no,d.uploaded_at,d.object_path "
                 + "FROM horse_registration_documents d JOIN horse_registration_requests r ON r.id=d.request_id "
                 + "WHERE r.approved_horse_id=? AND r.status='APPROVED'" + ownerFilter + " ORDER BY d.uploaded_at DESC", args.toArray());
     }
@@ -160,46 +187,52 @@ public class HorseService {
 
     @Transactional
     public Map<String, Object> save(Actor actor, UUID id, HorseRequest request) {
-        Map<String, Object> old = null;
-        if (id != null) {
-            var rows = db.queryForList("SELECT * FROM horses WHERE id=? AND deleted_at IS NULL FOR UPDATE", id.toString());
-            if (rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa");
-            old = rows.getFirst();
-            Long owner = old.get("owner_id") == null ? null : ((Number) old.get("owner_id")).longValue();
-            if (!Objects.equals(owner, request.ownerId()) && !request.confirmOwnerChange())
-                throw new ResponseStatusException(CONFLICT, "Cần xác nhận thay đổi chủ sở hữu");
+        if (id == null) {
+            throw new ResponseStatusException(FORBIDDEN,
+                    "Hồ sơ ngựa mới phải do Horse Owner gửi yêu cầu và được Club Manager duyệt.");
         }
+        Horse horse = horseRepository.findActiveByIdForUpdate(id.toString())
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
+        if (!Objects.equals(horse.getOwnerId(), request.ownerId()))
+            throw new ResponseStatusException(CONFLICT,
+                    "Thay đổi chủ sở hữu cần yêu cầu liên kết và sự đồng ý của chủ hiện tại.");
         if (request.birthYear() != null && request.birthYear() > time.today().getYear()) throw new ResponseStatusException(BAD_REQUEST, "Năm sinh không được ở tương lai");
-        if (request.ownerId() == null) throw new ResponseStatusException(BAD_REQUEST, "Mỗi hồ sơ ngựa cần một chủ sở hữu chính");
-        if (db.queryForObject("SELECT count(*) FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' AND u.deleted_at IS NULL", Long.class, request.ownerId()) == 0)
-            throw new ResponseStatusException(BAD_REQUEST, "Chủ ngựa phải là Horse Owner đã được duyệt");
+        if (request.ownerId() != null) {
+            AppUser owner = userRepository.findById(request.ownerId()).orElse(null);
+            if (owner == null || owner.getStatus() != UserStatus.APPROVED || owner.getDeletedAt() != null
+                    || owner.isMustChangePassword() || owner.getRole() == null
+                    || !"HORSE_OWNER".equals(owner.getRole().getName()))
+                throw new ResponseStatusException(BAD_REQUEST, "Chủ ngựa phải là Horse Owner đã được duyệt");
+        }
         // Serialize competing admissions to the same stable; never rely on a dropdown alone.
-        var boxes = db.queryForList("SELECT * FROM stable_boxes WHERE id=? FOR UPDATE", request.stableBoxId().toString());
-        if (boxes.isEmpty()) throw new ResponseStatusException(BAD_REQUEST, "Chuồng không tồn tại");
-        var box = boxes.getFirst();
-        long occupied = db.queryForObject("SELECT count(*) FROM horses WHERE stable_box_id=? AND deleted_at IS NULL AND id<>?", Long.class, request.stableBoxId().toString(), id == null ? "" : id.toString());
-        if (!"Available".equals(box.get("status")) || !(box.get("capacity") instanceof Number capacity) || occupied >= capacity.intValue())
+        var box = stableBoxRepository.findByIdForUpdate(request.stableBoxId().toString())
+                .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "Chuồng không tồn tại"));
+        long occupied = horseRepository.countByStableBoxIdAndDeletedAtIsNullAndIdNot(
+                request.stableBoxId().toString(), id.toString());
+        if (!"Available".equals(box.getStatus()) || box.getCapacity() == null || occupied >= box.getCapacity())
             throw new ResponseStatusException(CONFLICT, "Chuồng đã đầy hoặc không khả dụng");
+        String microchip = optionalIdentifier(request.microchipNumber());
+        String passport = optionalIdentifier(request.passportNumber());
+        validateIdentityAvailable(microchip, passport, id.toString(), id.toString());
         String path = request.imagePath();
-        if (path == null && old != null) path = (String) old.get("image_url");
-        if (path != null && !Objects.equals(path, old == null ? null : old.get("image_url"))) {
-            if (db.queryForObject("SELECT count(*) FROM horse_image_uploads WHERE object_path=? AND uploaded_by=?", Long.class, path, actor.id()) == 0)
+        if (path == null) path = horse.getImageUrl();
+        if (path != null && !Objects.equals(path, horse.getImageUrl())) {
+            if (!horseImageUploadRepository.existsByObjectPathAndUploadedBy(path, actor.id()))
                 throw new ResponseStatusException(BAD_REQUEST, "Ảnh phải được upload qua hệ thống bởi tài khoản hiện tại");
         }
-        if (id == null) {
-            id = UUID.randomUUID();
-            db.update("INSERT INTO horses(id,horse_name,breed,birth_year,height_cm,current_weight_kg,pedigree_father,pedigree_mother,image_url,stable_box_id,owner_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", id.toString(), request.horseName().trim(), request.breed(), request.birthYear(), request.heightCm(), request.currentWeightKg(), request.pedigreeFather(), request.pedigreeMother(), path, request.stableBoxId().toString(), request.ownerId(), time.utcNow());
-            audit(actor.id(), "CREATE_HORSE: " + id);
-            if (request.ownerId() != null) ownershipChange(id.toString(), null, request.ownerId(), actor.id(), "INITIAL_ASSIGNMENT");
-        } else {
-            db.update("UPDATE horses SET horse_name=?,breed=?,birth_year=?,height_cm=?,current_weight_kg=?,pedigree_father=?,pedigree_mother=?,image_url=?,stable_box_id=?,owner_id=? WHERE id=?", request.horseName().trim(), request.breed(), request.birthYear(), request.heightCm(), request.currentWeightKg(), request.pedigreeFather(), request.pedigreeMother(), path, request.stableBoxId().toString(), request.ownerId(), id.toString());
-            audit(actor.id(), "UPDATE_HORSE: " + id);
-            Long oldOwner = ownerId(old.get("owner_id"));
-            if (!Objects.equals(oldOwner, request.ownerId())) {
-                ownershipChange(id.toString(), oldOwner, request.ownerId(), actor.id(), "MANAGER_UPDATE");
-                audit(actor.id(), "CHANGE_HORSE_OWNER: " + id + " " + oldOwner + " -> " + request.ownerId());
-            }
-        }
+        horse.setHorseName(request.horseName().trim());
+        horse.setBreed(request.breed());
+        horse.setBirthYear(request.birthYear());
+        horse.setHeightCm(request.heightCm());
+        horse.setCurrentWeightKg(request.currentWeightKg());
+        horse.setPedigreeFather(request.pedigreeFather());
+        horse.setPedigreeMother(request.pedigreeMother());
+        horse.setMicrochipNumber(microchip);
+        horse.setPassportNumber(passport);
+        horse.setImageUrl(path);
+        horse.setStableBoxId(request.stableBoxId().toString());
+        horseRepository.saveAndFlush(horse);
+        audit(actor.id(), "UPDATE_HORSE: " + id);
         return detail(actor, id);
     }
 
@@ -225,14 +258,28 @@ public class HorseService {
         ownershipHistoryRepository.saveAndFlush(history);
     }
 
-    private static Long ownerId(Object value) {
-        return value instanceof Number number ? number.longValue() : null;
+    private void validateIdentityAvailable(String microchip, String passport, String horseId, String requestId) {
+        if (microchip != null || passport != null) {
+            identityLockRepository.findByIdForUpdate(1)
+                    .orElseThrow(() -> new IllegalStateException("Horse identity lock is missing"));
+        }
+        List<String> activeRequests = List.of("PENDING", "NEEDS_INFORMATION", "AWAITING_OWNER_CONSENT");
+        if (microchip != null && (horseRepository.existsByMicrochipNumberIgnoreCaseAndIdNot(microchip, horseId)
+                || registrationRequestRepository.existsOtherActiveMicrochip("REGISTER", activeRequests,
+                        microchip, requestId)))
+            throw new ResponseStatusException(CONFLICT, "Số microchip đã được dùng cho một hồ sơ khác");
+        if (passport != null && (horseRepository.existsByPassportNumberIgnoreCaseAndIdNot(passport, horseId)
+                || registrationRequestRepository.existsOtherActivePassport("REGISTER", activeRequests,
+                        passport, requestId)))
+            throw new ResponseStatusException(CONFLICT, "Số hộ chiếu đã được dùng cho một hồ sơ khác");
+    }
+
+    private static String optionalIdentifier(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Transactional
     public Map<String, Object> update(Actor actor, UUID id, HorseUpdateRequest request) {
-        var rows = db.queryForList("SELECT * FROM horses WHERE id=? AND deleted_at IS NULL FOR UPDATE", id.toString());
-        if (rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa");
         String horseName = request.horseName().trim();
         String breed = request.breed();
         Integer birthYear = request.birthYear();
@@ -240,10 +287,13 @@ public class HorseService {
         var currentWeightKg = request.currentWeightKg();
         String father = request.pedigreeFather();
         String mother = request.pedigreeMother();
+        String microchip = request.microchipNumber();
+        String passport = request.passportNumber();
         String stable = request.stableBoxId().toString();
         Long owner = request.ownerId();
         String image = request.imagePath();
-        var merged = new HorseRequest(horseName, breed, birthYear, heightCm, currentWeightKg, father, mother, image, UUID.fromString(stable), owner, request.confirmOwnerChange());
+        var merged = new HorseRequest(horseName, breed, birthYear, heightCm, currentWeightKg, father, mother,
+                microchip, passport, image, UUID.fromString(stable), owner, request.confirmOwnerChange());
         return save(actor, id, merged);
     }
 
@@ -308,11 +358,12 @@ public class HorseService {
     @Transactional
     public Map<String, Object> delete(Actor actor, UUID id, boolean confirmed) {
         if (!confirmed) throw new ResponseStatusException(BAD_REQUEST, "Cần xác nhận xóa hồ sơ");
-        detail(actor, id);
+        Horse horse = horseRepository.findActiveByIdForUpdate(id.toString())
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
         long scheduled = db.queryForObject("SELECT count(*) FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? AND ts.status='Scheduled' AND ce.event_date>=?", Long.class, id.toString(), time.today());
         LocalDateTime deletedAt = time.utcNow();
-        if (db.update("UPDATE horses SET deleted_at=? WHERE id=? AND deleted_at IS NULL", deletedAt, id.toString()) == 0)
-            throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa");
+        horse.setDeletedAt(deletedAt);
+        horseRepository.saveAndFlush(horse);
         audit(actor.id(), "DELETE_HORSE: " + id);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", id);

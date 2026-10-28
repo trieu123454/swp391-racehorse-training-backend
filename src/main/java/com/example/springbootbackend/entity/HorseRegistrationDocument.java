@@ -35,6 +35,12 @@ public class HorseRegistrationDocument {
     @Column(name = "file_size", nullable = false)
     private Long fileSize;
 
+    @Column(name = "document_type", nullable = false, length = 30)
+    private String documentType = "OTHER";
+
+    @Column(name = "revision_no", nullable = false)
+    private Integer revisionNo = 1;
+
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
@@ -84,6 +90,22 @@ public class HorseRegistrationDocument {
 
     public void setFileSize(Long fileSize) {
         this.fileSize = fileSize;
+    }
+
+    public String getDocumentType() {
+        return documentType;
+    }
+
+    public void setDocumentType(String documentType) {
+        this.documentType = documentType;
+    }
+
+    public Integer getRevisionNo() {
+        return revisionNo;
+    }
+
+    public void setRevisionNo(Integer revisionNo) {
+        this.revisionNo = revisionNo;
     }
 
     public LocalDateTime getUploadedAt() {

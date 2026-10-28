@@ -29,4 +29,12 @@ public interface HorseRepository extends JpaRepository<Horse, String> {
     long countByStableBoxIdAndDeletedAtIsNullAndIdNot(String stableBoxId, String id);
 
     boolean existsByIdAndOwnerIdAndDeletedAtIsNull(String id, Long ownerId);
+
+    boolean existsByMicrochipNumberIgnoreCase(String microchipNumber);
+
+    boolean existsByPassportNumberIgnoreCase(String passportNumber);
+
+    boolean existsByMicrochipNumberIgnoreCaseAndIdNot(String microchipNumber, String id);
+
+    boolean existsByPassportNumberIgnoreCaseAndIdNot(String passportNumber, String id);
 }

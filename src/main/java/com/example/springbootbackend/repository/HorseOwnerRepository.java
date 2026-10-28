@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 public class HorseOwnerRepository {
     private static final String HORSE_SELECT = """
             SELECT h.id,h.horse_name,h.breed,h.birth_year,h.pedigree_father,h.pedigree_mother,
+                   h.microchip_number,h.passport_number,
                    h.image_url,h.current_status,h.current_weight_kg,h.height_cm,h.readiness_status,
                    h.is_training_locked,h.lock_level,h.lock_reason,h.created_at,
                    h.stable_box_id,h.owner_id,s.box_code,s.section,u.full_name AS owner_name

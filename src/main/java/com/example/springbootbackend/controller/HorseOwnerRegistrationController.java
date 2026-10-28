@@ -2,6 +2,7 @@ package com.example.springbootbackend.controller;
 
 import com.example.springbootbackend.service.HorseRegistrationService;
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.servlet.http.HttpServletRequest;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
@@ -31,8 +32,21 @@ public class HorseOwnerRegistrationController {
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> submit(Principal principal,
             @RequestPart("request") JsonNode body,
-            @RequestPart("horseImage") MultipartFile horseImage,
-            @RequestPart(value = "documents", required = false) List<MultipartFile> documents) {
-        return service.submit(principal.getName(), body, horseImage, documents);
+            @RequestPart(value = "horseImage", required = false) MultipartFile horseImage,
+            @RequestPart(value = "documents", required = false) List<MultipartFile> documents,
+            @RequestPart(value = "documentTypes", required = false) JsonNode documentTypes,
+            HttpServletRequest request) {
+        return service.submit(principal.getName(), body, horseImage, documents, documentTypes, request.getRemoteAddr());
+    }
+
+    @PatchMapping(value = "/{requestId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String, Object> resubmit(Principal principal, HttpServletRequest request,
+            @PathVariable String requestId,
+            @RequestPart("request") JsonNode body,
+            @RequestPart(value = "horseImage", required = false) MultipartFile horseImage,
+            @RequestPart(value = "documents", required = false) List<MultipartFile> documents,
+            @RequestPart(value = "documentTypes", required = false) JsonNode documentTypes) {
+        return service.resubmit(principal.getName(), requestId, body, horseImage, documents,
+                documentTypes, request.getRemoteAddr());
     }
 }
