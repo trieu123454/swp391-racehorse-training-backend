@@ -124,17 +124,22 @@
 
 ### Use case
 
-- `F1-UC01` Club Manager tạo hồ sơ ngựa.
-- `F1-UC02` Club Manager/Head Trainer xem danh sách và chi tiết.
-- `F1-UC03` Club Manager cập nhật thông tin cơ bản.
-- `F1-UC04` Club Manager soft delete.
-- `F1-UC05` Club Manager/Head Trainer tìm kiếm và lọc.
-- `F1-UC06` Horse Owner xem ngựa thuộc sở hữu.
-- `F1-UC07` Hệ thống upload và hiển thị ảnh hồ sơ.
+- `F1-UC01` Horse Owner gửi yêu cầu `REGISTER` kèm tài liệu hỗ trợ.
+- `F1-UC02` Horse Owner gửi yêu cầu `LINK` để liên kết với hồ sơ ngựa có sẵn.
+- `F1-UC03` Club Manager xem xét yêu cầu đang chờ và duyệt, yêu cầu bổ sung hoặc từ chối.
+- `F1-UC04` Horse Owner sửa và gửi lại yêu cầu được trả về bổ sung.
+- `F1-UC05` Khi liên kết ngựa đang có chủ, chủ hiện tại đồng ý hoặc từ chối sau bước xem xét của manager.
+- `F1-UC06` Nhân sự có quyền xem hồ sơ, lý lịch và kết quả tìm kiếm; Horse Owner chỉ xem ngựa hiện thuộc sở hữu của mình.
+- `F1-UC07` Club Manager cập nhật hồ sơ đã duyệt hoặc xóa mềm hồ sơ.
+- `F1-UC08` Hệ thống lưu ảnh và giấy tờ riêng tư, chỉ cấp liên kết tạm thời cho người có quyền.
 
 ### Ràng buộc
 
-Hồ sơ cơ bản sửa tên, giống, năm sinh, chiều cao đến vai, cân nặng hiện tại, pedigree, ảnh, chuồng và owner. Cân nặng nhập trong hồ sơ là giá trị ban đầu/hiện hành; khi Head Trainer ghi metrics mới, cân nặng mới nhất từ metrics sẽ được dùng làm cân nặng hiện tại. Màn hình hồ sơ không sửa lịch sử metrics, status sức khỏe, readiness hay khóa huấn luyện.
+Horse Owner là người gửi yêu cầu; Club Manager xem xét và không trực tiếp tạo đăng ký mới. Yêu cầu cần tên ngựa và ít nhất một tài liệu hỗ trợ; yêu cầu hiện có không bắt buộc loại tài liệu cụ thể. Ảnh ngựa không bắt buộc. Giống, năm sinh, chiều cao, cân nặng hiện tại, tên ngựa cha/mẹ, số microchip, số hộ chiếu và ghi chú chủ ngựa là tùy chọn theo hợp đồng hiện tại. Có thể đính kèm chứng nhận ngựa hoặc hồ sơ sức khỏe nhưng yêu cầu hiện tại không bắt buộc. Chưa có quy tắc yêu cầu giới tính, ngày sinh đầy đủ, màu lông hoặc mã đăng ký riêng.
+
+Trạng thái yêu cầu gồm `PENDING`, `NEEDS_INFORMATION`, `AWAITING_OWNER_CONSENT`, `APPROVED` và `REJECTED`. Chỉ Horse Owner gửi yêu cầu mới được sửa yêu cầu `NEEDS_INFORMATION`; gửi lại sẽ tạo phiên bản mới và chuyển về `PENDING`. Manager phải ghi chú khi yêu cầu bổ sung hoặc từ chối. Từ chối là trạng thái cuối. Yêu cầu LINK không đổi chủ sở hữu hồ sơ cho đến khi chủ hiện tại đồng ý. Schema hiện tại chỉ hỗ trợ một chủ cho mỗi ngựa, chưa hỗ trợ đồng sở hữu. Nếu có microchip/hộ chiếu, giá trị phải duy nhất không phân biệt chữ hoa/thường.
+
+Sau khi duyệt, hồ sơ lưu tên, giống, năm sinh, chiều cao, cân nặng hiện tại, lý lịch, ảnh, mã định danh, chuồng và chủ sở hữu. Club Manager có thể cập nhật thông tin cơ bản và lý lịch; không thể đổi chủ trực tiếp mà phải dùng LINK và chờ chủ hiện tại đồng ý. Horse Owner chỉ xem hồ sơ đã duyệt. Manager và các vai trò vận hành giữ nguyên phạm vi xem hồ sơ hiện có. Cân nặng nhập trong hồ sơ là giá trị ban đầu/hiện hành; khi Head Trainer ghi metrics mới, cân nặng mới nhất từ metrics sẽ được dùng làm cân nặng hiện tại. Màn hình hồ sơ không sửa lịch sử metrics, status sức khỏe, readiness hay khóa huấn luyện.
 
 ### Tiêu chí hoàn thành
 
@@ -239,7 +244,10 @@ Hồ sơ cơ bản sửa tên, giống, năm sinh, chiều cao đến vai, cân 
 ### Epic A — Nền tảng và dữ liệu ngựa
 
 - Là Club Manager, tôi muốn phê duyệt tài khoản để chỉ người hợp lệ truy cập dữ liệu.
-- Là Club Manager, tôi muốn tạo hồ sơ ngựa đầy đủ để các module khác dùng cùng một nguồn dữ liệu.
+- Là Horse Owner, tôi muốn gửi yêu cầu đăng ký ngựa kèm giấy tờ để Club Manager xem xét và phê duyệt trước khi tạo hồ sơ.
+- Là Club Manager, tôi muốn yêu cầu bổ sung hoặc từ chối hồ sơ với lý do để Horse Owner biết bước tiếp theo.
+- Là Horse Owner, tôi muốn gửi lại hồ sơ đã bổ sung và theo dõi lịch sử từng lần xử lý.
+- Là chủ sở hữu hiện tại, tôi muốn xác nhận trước khi quyền sở hữu ngựa được chuyển sang người khác.
 - Là Head Trainer, tôi muốn tìm và lọc ngựa để lập kế hoạch phù hợp.
 - Là Horse Owner, tôi muốn chỉ thấy ngựa của mình để bảo mật thông tin.
 

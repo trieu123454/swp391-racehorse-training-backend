@@ -16,6 +16,12 @@ Both endpoints require a signed-in, approved `HORSE_OWNER` account. Every horse
 query is constrained by the authenticated user's `owner_id` and excludes
 soft-deleted horses. An ID belonging to another owner returns 404.
 
+Horse registration, correction/resubmission, and current-owner transfer consent
+are documented in [`flow1-api.md`](flow1-api.md). Approved profiles remain
+read-only in the owner portal; only a request returned as `NEEDS_INFORMATION`
+can be corrected. A transfer consent request is visible only to the horse's
+currently recorded owner.
+
 The dashboard uses existing data: body weight and performance from
 `training_metrics_logs`; examination measurements from `health_exams`; training
 dates from `calendar_events` linked to `training_schedules`; clips from

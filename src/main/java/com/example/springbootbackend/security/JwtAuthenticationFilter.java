@@ -1,12 +1,8 @@
 package com.example.springbootbackend.security;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
-
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -14,14 +10,21 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.example.springbootbackend.entity.UserStatus;
+import com.example.springbootbackend.repository.AppUserRepository;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
-    private final com.example.springbootbackend.auth.repository.AppUserRepository users;
+    private final AppUserRepository users;
 
-    public JwtAuthenticationFilter(JwtService jwtService,
-            com.example.springbootbackend.auth.repository.AppUserRepository users) {
+    public JwtAuthenticationFilter(JwtService jwtService, AppUserRepository users) {
         this.jwtService = jwtService;
         this.users = users;
     }
@@ -37,12 +40,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 var user = users.findByEmailIgnoreCase(email).orElse(null);
                 if (user == null || user.getDeletedAt() != null
                         || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
-                if (user.getStatus() != com.example.springbootbackend.auth.entity.UserStatus.APPROVED) {
-                    if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
+                if (user.getStatus() != UserStatus.APPROVED) {
+                    if (VetHttpSecurity.applies(request)) {
                         try {
-                            com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                            VetHttpSecurity.write(response, 403,
                                     "FORBIDDEN", "Tài khoản không được phép truy cập");
-                        } catch (IOException ex) { throw new java.io.UncheckedIOException(ex); }
+                        } catch (IOException ex) {
+                            throw new UncheckedIOException(ex);
+                        }
                         request.setAttribute("vetAccessDenied", Boolean.TRUE);
                     }
                     return;
@@ -53,15 +58,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     response.setCharacterEncoding("UTF-8");
                     response.setHeader("Cache-Control", "no-store");
                     try {
-                        if (com.example.springbootbackend.veterinarian.support.VetHttpSecurity.applies(request)) {
-                            com.example.springbootbackend.veterinarian.support.VetHttpSecurity.write(response, 403,
+                        if (VetHttpSecurity.applies(request)) {
+                            VetHttpSecurity.write(response, 403,
                                     "FORBIDDEN", "Cần đổi mật khẩu trước khi tiếp tục");
                         } else {
                             response.getWriter().write("{\"code\":\"PASSWORD_CHANGE_REQUIRED\",\"message\":\"Change your password before continuing\"}");
                         }
                         response.flushBuffer();
                     } catch (IOException ex) {
-                        throw new java.io.UncheckedIOException(ex);
+                        throw new UncheckedIOException(ex);
                     }
                     request.setAttribute("passwordChangeRequired", Boolean.TRUE);
                     return;
