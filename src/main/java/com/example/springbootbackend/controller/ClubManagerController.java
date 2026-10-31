@@ -46,6 +46,7 @@ public class ClubManagerController {
     }
 
     @GetMapping("/users")
+    @PreAuthorize("hasAnyRole('CLUB_MANAGER', 'HEAD_TRAINER')")
     public List<PendingUserResponse> users(
             Principal principal,
             @RequestParam(defaultValue = "APPROVED") String status,

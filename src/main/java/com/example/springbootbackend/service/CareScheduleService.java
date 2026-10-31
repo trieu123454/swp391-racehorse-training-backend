@@ -325,6 +325,7 @@ public class CareScheduleService {
         if (rows.isEmpty()) throw new VetException(404, "NOT_FOUND", "Không tìm thấy lịch chăm sóc");
         var row = rows.getFirst();
         if (row.get("assigned_doctor_id") != null) lockDoctor(doctor(row), false);
+        access.requireHorse(horse(row), true);
         return data.row("periodic_care_schedules", id, true);
     }
 

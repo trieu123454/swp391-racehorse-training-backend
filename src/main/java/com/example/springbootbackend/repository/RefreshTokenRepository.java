@@ -1,5 +1,6 @@
 package com.example.springbootbackend.repository;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -20,4 +21,10 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Modifying
     @Query("update RefreshToken rt set rt.revoked = true where rt.user.id = :userId and rt.revoked = false")
     void revokeActiveTokensByUserId(@Param("userId") Long userId);
+
+    @Modifying
+    @Query("update RefreshToken rt set rt.revoked = true where rt.sessionId = :sessionId and rt.revoked = false")
+    void revokeActiveTokensBySessionId(@Param("sessionId") String sessionId);
+
+    boolean existsBySessionIdAndRevokedFalseAndExpiresAtAfter(String sessionId, LocalDateTime now);
 }

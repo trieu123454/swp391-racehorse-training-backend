@@ -159,7 +159,7 @@ class AuthControllerTests {
     void pendingStaffCannotRefreshOrBeAutoActivated(String role) throws Exception {
         AppUser user = seed(role, "user@example.com");
         tokens.save(new RefreshToken(
-                user, "pending-refresh", java.time.LocalDateTime.now().plusDays(1)));
+                user, java.util.UUID.randomUUID().toString(), "pending-refresh", java.time.LocalDateTime.now().plusDays(1)));
         mockMvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(java.util.Map.of("refreshToken", "pending-refresh"))))
                 .andExpect(status().isBadRequest());

@@ -31,8 +31,7 @@ public class VetHorseService {
             VetAudit audit,
             VetTime time,
             NotificationService notifications,
-            TrainingSimulationRecorder simulationRecorder
-    ) {
+            TrainingSimulationRecorder simulationRecorder) {
         this.data = data;
         this.access = access;
         this.audit = audit;
@@ -53,7 +52,8 @@ public class VetHorseService {
         query += " ORDER BY CASE h.current_status WHEN 'Injured' THEN 1 WHEN 'Quarantine' THEN 2 WHEN 'Monitoring' THEN 3 ELSE 4 END,h.horse_name,h.id";
         var rows = data.db.query(query, VetRows.MAPPER, args.toArray());
         Map<String, Long> counts = new LinkedHashMap<>();
-        for (String status : List.of("Healthy", "Monitoring", "Injured", "Quarantine")) counts.put(status, 0L);
+        for (String status : List.of("Healthy", "Monitoring", "Injured", "Quarantine"))
+            counts.put(status, 0L);
         for (var row : rows) {
             String status = row.get("current_status").toString();
             counts.computeIfPresent(status, (key, value) -> value + 1);
@@ -79,17 +79,19 @@ public class VetHorseService {
         };
         var rows = "Open".equals(status) || "All".equals(status)
                 ? data.db.query("SELECT i.id,i.horse_id,h.horse_name,h.current_status,h.readiness_status,"
-                + "s.box_code,s.section,i.groom_id,g.full_name AS groom_name,i.issue_description,i.image_url,"
-                + "i.status,i.is_emergency,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,i.assignment_note,"
-                + "i.result_note,i.created_at,i.assigned_at,i.result_at,i.resolved_at,CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
-                + "LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users g ON g.user_id=i.groom_id "
-                + "LEFT JOIN users a ON a.user_id=i.assigned_to " + filter + " ORDER BY i.is_emergency DESC,i.created_at DESC,i.id", VetRows.MAPPER, vetId)
+                        + "s.box_code,s.section,i.groom_id,g.full_name AS groom_name,i.issue_description,i.image_url,"
+                        + "i.status,i.is_emergency,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,i.assignment_note,"
+                        + "i.result_note,i.created_at,i.assigned_at,i.result_at,i.resolved_at,CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
+                        + "LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users g ON g.user_id=i.groom_id "
+                        + "LEFT JOIN users a ON a.user_id=i.assigned_to " + filter
+                        + " ORDER BY i.is_emergency DESC,i.created_at DESC,i.id", VetRows.MAPPER, vetId)
                 : data.db.query("SELECT i.id,i.horse_id,h.horse_name,h.current_status,h.readiness_status,"
-                + "s.box_code,s.section,i.groom_id,g.full_name AS groom_name,i.issue_description,i.image_url,"
-                + "i.status,i.is_emergency,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,i.assignment_note,"
-                + "i.result_note,i.created_at,i.assigned_at,i.result_at,i.resolved_at,CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
-                + "LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users g ON g.user_id=i.groom_id "
-                + "LEFT JOIN users a ON a.user_id=i.assigned_to " + filter + " ORDER BY i.is_emergency DESC,i.created_at DESC,i.id", VetRows.MAPPER, vetId, status);
+                        + "s.box_code,s.section,i.groom_id,g.full_name AS groom_name,i.issue_description,i.image_url,"
+                        + "i.status,i.is_emergency,i.assigned_to,i.assigned_role,a.full_name AS assignee_name,i.assignment_note,"
+                        + "i.result_note,i.created_at,i.assigned_at,i.result_at,i.resolved_at,CASE WHEN i.assigned_to=? THEN TRUE ELSE FALSE END AS assigned_to_me FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
+                        + "LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users g ON g.user_id=i.groom_id "
+                        + "LEFT JOIN users a ON a.user_id=i.assigned_to " + filter
+                        + " ORDER BY i.is_emergency DESC,i.created_at DESC,i.id", VetRows.MAPPER, vetId, status);
         return Map.of("status", status, "data", rows);
     }
 
@@ -98,12 +100,15 @@ public class VetHorseService {
         long vetId = access.requireRole(email, "VETERINARIAN");
         String id = incidentId.toString();
         var rows = data.db.query("SELECT i.id,i.status,i.is_emergency,i.assigned_to,i.groom_id,h.horse_name "
-                + "FROM stable_incidents i JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i", VetRows.MAPPER, id);
-        if (rows.isEmpty()) throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
+                + "FROM stable_incidents i JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",
+                VetRows.MAPPER, id);
+        if (rows.isEmpty())
+            throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
         Map<String, Object> incident = rows.getFirst();
         if (!Boolean.TRUE.equals(incident.get("is_emergency")) || !"Pending".equals(incident.get("status"))
                 || incident.get("assigned_to") != null)
-            throw new VetException(409, "INCIDENT_NOT_CLAIMABLE", "Only an unassigned emergency incident can be accepted");
+            throw new VetException(409, "INCIDENT_NOT_CLAIMABLE",
+                    "Only an unassigned emergency incident can be accepted");
         String note = "Veterinarian accepted this urgent incident.";
         data.db.update("UPDATE stable_incidents SET status='InProgress',assigned_to=?,assigned_role='VETERINARIAN',"
                 + "assignment_note=?,assigned_by=?,assigned_at=? WHERE id=?", vetId, note, vetId, time.utcNow(), id);
@@ -113,7 +118,8 @@ public class VetHorseService {
             notifications.schedule(manager, "Stable_Incidents", id, message, time.now());
         if (incident.get("groom_id") instanceof Number reporter)
             notifications.schedule(reporter.longValue(), "Stable_Incidents", id, message, time.now());
-        return Map.of("id", id, "status", "InProgress", "assigned_to", vetId, "assigned_role", "VETERINARIAN", "assignment_note", note);
+        return Map.of("id", id, "status", "InProgress", "assigned_to", vetId, "assigned_role", "VETERINARIAN",
+                "assignment_note", note);
     }
 
     @Transactional
@@ -122,22 +128,71 @@ public class VetHorseService {
         var fields = VetInput.parse(body, "result_note:2000");
         VetInput.required(fields, "result_note");
         String id = incidentId.toString();
-        var rows = data.db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
-                + "JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i", VetRows.MAPPER, id);
-        if (rows.isEmpty()) throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
+        var rows = data.db
+                .query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name,h.owner_id FROM stable_incidents i "
+                        + "JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i", VetRows.MAPPER, id);
+        if (rows.isEmpty())
+            throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
         Map<String, Object> incident = rows.getFirst();
         if (!"InProgress".equals(incident.get("status")) || !(incident.get("assigned_to") instanceof Number assigned)
                 || assigned.longValue() != vetId)
             throw new VetException(403, "FORBIDDEN", "Incident is not assigned to this veterinarian");
-        data.db.update("UPDATE stable_incidents SET result_note=?,result_by=?,result_at=?,status='AwaitingClosure' WHERE id=?",
+        data.db.update(
+                "UPDATE stable_incidents SET result_note=?,result_by=?,result_at=?,status='AwaitingClosure' WHERE id=?",
                 fields.get("result_note"), vetId, time.utcNow(), id);
         audit.record(vetId, ip, "SUBMIT_STABLE_INCIDENT_RESULT:" + id);
-        String message = "Incident result submitted for " + incident.get("horse_name") + "; Club Manager review is pending.";
+        String message = "Incident result submitted for " + incident.get("horse_name")
+                + "; Club Manager review is pending.";
         for (long manager : activeRecipients("CLUB_MANAGER"))
             notifications.schedule(manager, "Stable_Incidents", id, message, time.now());
         if (incident.get("groom_id") instanceof Number reporter)
-            notifications.schedule(reporter.longValue(), "Stable_Incidents", id, "A result was submitted for your incident on " + incident.get("horse_name") + ".", time.now());
+            notifications.schedule(reporter.longValue(), "Stable_Incidents", id,
+                    "A result was submitted for your incident on " + incident.get("horse_name") + ".", time.now());
+        if (incident.get("owner_id") instanceof Number ownerId)
+            notifyActiveOwner(ownerId.longValue(), id,
+                    "Veterinarian submitted an assessment for the incident involving your horse "
+                            + incident.get("horse_name") + ".");
         return Map.of("id", id, "status", "AwaitingClosure", "result_note", fields.get("result_note"));
+    }
+
+    @Transactional
+    public Map<String, Object> resolveIncident(String email, String ip, UUID incidentId) {
+        long vetId = access.requireRole(email, "VETERINARIAN");
+        String id = incidentId.toString();
+        var rows = data.db.query(
+                "SELECT i.id,i.status,i.assigned_to,i.groom_id,i.result_note,h.horse_name,h.owner_id FROM stable_incidents i "
+                        + "JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",
+                VetRows.MAPPER, id);
+        if (rows.isEmpty())
+            throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
+        Map<String, Object> incident = rows.getFirst();
+        Object assignedTo = incident.get("assigned_to");
+        if (assignedTo instanceof Number assigned && assigned.longValue() != vetId)
+            throw new VetException(403, "FORBIDDEN", "Incident is not assigned to this veterinarian");
+        if (!List.of("InProgress", "AwaitingClosure").contains(incident.get("status")))
+            throw new VetException(409, "INCIDENT_NOT_OPEN", "Incident cannot be resolved in its current state");
+        data.db.update("UPDATE stable_incidents SET status='Resolved',reviewed_by=?,resolved_at=? WHERE id=?",
+                vetId, time.utcNow(), id);
+        audit.record(vetId, ip, "RESOLVE_STABLE_INCIDENT:" + id);
+        String horseName = incident.get("horse_name").toString();
+        for (long manager : activeRecipients("CLUB_MANAGER"))
+            notifications.schedule(manager, "Stable_Incidents", id,
+                    "Incident for " + horseName + " was resolved by the assigned veterinarian.", time.now());
+        if (incident.get("groom_id") instanceof Number reporter)
+            notifications.schedule(reporter.longValue(), "Stable_Incidents", id,
+                    "Your incident report for " + horseName + " has been resolved.", time.now());
+        if (incident.get("owner_id") instanceof Number ownerId)
+            notifyActiveOwner(ownerId.longValue(), id,
+                    "The incident involving your horse " + horseName + " has been resolved.");
+        return Map.of("id", id, "status", "Resolved");
+    }
+
+    private void notifyActiveOwner(long ownerId, String incidentId, String message) {
+        List<Long> owners = data.db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' "
+                + "AND u.deleted_at IS NULL AND u.must_change_password=FALSE", Long.class, ownerId);
+        for (long id : owners)
+            notifications.schedule(id, "Stable_Incidents", incidentId, message, time.now());
     }
 
     @Transactional
@@ -154,12 +209,15 @@ public class VetHorseService {
             throw VetException.invalid("readiness_status", "Ngua Injured/Quarantine khong the Ready");
         if (hasUnresolvedInjury(horse) && ("Healthy".equals(status)
                 || "Ready".equals(fields.getOrDefault("readiness_status", old.get("readiness_status")))))
-            throw new VetException(409, "ACTIVE_INJURY_MARKER", "Close the latest injury assessment as Recovered before marking the horse Healthy or Ready");
+            throw new VetException(409, "ACTIVE_INJURY_MARKER",
+                    "Close the latest injury assessment as Recovered before marking the horse Healthy or Ready");
         boolean newlyLocked = medicallyRestricted && !Boolean.TRUE.equals(old.get("is_training_locked"));
         Map<String, Object> updates = new LinkedHashMap<>();
         updates.put("current_status", status);
-        if (fields.containsKey("readiness_status")) updates.put("readiness_status", fields.get("readiness_status"));
-        else if (medicallyRestricted && "Ready".equals(old.get("readiness_status"))) updates.put("readiness_status", "NotReady");
+        if (fields.containsKey("readiness_status"))
+            updates.put("readiness_status", fields.get("readiness_status"));
+        else if (medicallyRestricted && "Ready".equals(old.get("readiness_status")))
+            updates.put("readiness_status", "NotReady");
         if (newlyLocked) {
             updates.put("is_training_locked", true);
             updates.put("lock_level", "Critical");
@@ -168,7 +226,8 @@ public class VetHorseService {
         data.updateRow("horses", horse, updates);
         if (newlyLocked) {
             blockUpcomingSessions(horse);
-            notifyTrainingStaff(horse, "Ngua " + old.get("horse_name") + " bi tu dong khoa huan luyen do trang thai " + status);
+            notifyTrainingStaff(horse,
+                    "Ngua " + old.get("horse_name") + " bi tu dong khoa huan luyen do trang thai " + status);
         }
         audit.record(actor, ip, "UPDATE_HEALTH_STATUS:" + horse + ":" + old.get("current_status") + "->" + status
                 + (fields.get("note") == null ? "" : ":" + fields.get("note")));
@@ -180,10 +239,11 @@ public class VetHorseService {
         result.put("lock_level", newlyLocked ? "Critical" : old.get("lock_level"));
         result.put("lock_reason", newlyLocked ? updates.get("lock_reason") : old.get("lock_reason"));
         result.put("suggest_lock", false);
-        result.put("upcoming_sessions", data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
-                + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
-                + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun') "
-                + "ORDER BY ce.event_date,ce.start_time,ce.id", VetRows.MAPPER, horse, time.today()));
+        result.put("upcoming_sessions",
+                data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
+                        + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
+                        + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun') "
+                        + "ORDER BY ce.event_date,ce.start_time,ce.id", VetRows.MAPPER, horse, time.today()));
         return result;
     }
 
@@ -195,19 +255,23 @@ public class VetHorseService {
         VetInput.choice(fields, "lock_level", "Warning", "Critical");
         VetInput.required(fields, "lock_reason");
         boolean wasLocked = Boolean.TRUE.equals(old.get("is_training_locked"));
-        boolean changed = !wasLocked || !Objects.equals(old.get("lock_level"), fields.get("lock_level")) || !Objects.equals(old.get("lock_reason"), fields.get("lock_reason"));
+        boolean changed = !wasLocked || !Objects.equals(old.get("lock_level"), fields.get("lock_level"))
+                || !Objects.equals(old.get("lock_reason"), fields.get("lock_reason"));
         fields.put("is_training_locked", true);
         data.updateRow("horses", horse, fields);
         blockUpcomingSessions(horse);
         if (changed)
-            notifyTrainingStaff(horse, "Ngựa " + old.get("horse_name") + " bị khóa huấn luyện (" + fields.get("lock_level") + "): " + fields.get("lock_reason"));
+            notifyTrainingStaff(horse, "Ngựa " + old.get("horse_name") + " bị khóa huấn luyện ("
+                    + fields.get("lock_level") + "): " + fields.get("lock_reason"));
         audit.record(actor, ip, "LOCK_TRAINING:" + horse + ":" + fields.get("lock_level"));
         var result = new LinkedHashMap<>(fields);
         result.put("id", horse);
         result.put("was_locked", wasLocked);
-        result.put("upcoming_sessions", data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
-                + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
-                + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ce.event_type IN ('Training','TrialRun') ORDER BY ce.event_date,ce.start_time,ce.id", VetRows.MAPPER, horse, time.today()));
+        result.put("upcoming_sessions",
+                data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
+                        + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
+                        + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ce.event_type IN ('Training','TrialRun') ORDER BY ce.event_date,ce.start_time,ce.id",
+                        VetRows.MAPPER, horse, time.today()));
         return result;
     }
 
@@ -220,11 +284,14 @@ public class VetHorseService {
         if (!Boolean.TRUE.equals(old.get("is_training_locked")))
             throw new VetException(409, "NOT_LOCKED", "Ngựa chưa bị khóa huấn luyện");
         if (List.of("Injured", "Quarantine").contains(old.get("current_status")))
-            throw new VetException(409, "MEDICAL_RESTRICTION", "Cần cập nhật ngựa hết Injured/Quarantine trước khi mở khóa huấn luyện");
+            throw new VetException(409, "MEDICAL_RESTRICTION",
+                    "Cần cập nhật ngựa hết Injured/Quarantine trước khi mở khóa huấn luyện");
         if (hasUnresolvedInjury(horse))
-            throw new VetException(409, "ACTIVE_INJURY_MARKER", "Close the latest injury assessment as Recovered before unlocking training");
+            throw new VetException(409, "ACTIVE_INJURY_MARKER",
+                    "Close the latest injury assessment as Recovered before unlocking training");
         data.db.update("UPDATE horses SET is_training_locked=FALSE,lock_level=NULL,lock_reason=NULL WHERE id=?", horse);
-        data.db.update("UPDATE training_schedules SET status='Scheduled' WHERE horse_id=? AND status='Blocked' AND id IN "
+        data.db.update(
+                "UPDATE training_schedules SET status='Scheduled' WHERE horse_id=? AND status='Blocked' AND id IN "
                         + "(SELECT ts.id FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
                         + "WHERE ts.horse_id=? AND ts.status='Blocked' AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun'))",
                 horse, horse, time.today());
@@ -233,15 +300,20 @@ public class VetHorseService {
                 + "AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')", horse, time.today());
         notifyTrainingStaff(horse, "Ngựa " + old.get("horse_name") + " đã được mở khóa huấn luyện");
         audit.record(actor, ip, "UNLOCK_TRAINING:" + horse + ":" + fields.get("reason"));
-        return Map.of("id", horse, "is_training_locked", false, "suggest_status_update", List.of("Injured", "Quarantine").contains(old.get("current_status")));
+        return Map.of("id", horse, "is_training_locked", false, "suggest_status_update",
+                List.of("Injured", "Quarantine").contains(old.get("current_status")));
     }
 
-    /** Flow 2 must call inside its write transaction BEFORE creating plans/events. Holds horse row lock. */
+    /**
+     * Flow 2 must call inside its write transaction BEFORE creating plans/events.
+     * Holds horse row lock.
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void assertHorseNotLocked(String horse) {
         var row = horse(horse, true);
         if (hasUnresolvedInjury(horse))
-            throw new VetException(409, "ACTIVE_INJURY_MARKER", "Horse has an injury assessment that is still Active or Recovering");
+            throw new VetException(409, "ACTIVE_INJURY_MARKER",
+                    "Horse has an injury assessment that is still Active or Recovering");
         if (Boolean.TRUE.equals(row.get("is_training_locked"))) {
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("lock_level", row.get("lock_level"));
@@ -257,42 +329,45 @@ public class VetHorseService {
 
     private boolean hasUnresolvedInjury(String horse) {
         Long count = data.db.queryForObject("SELECT count(*) FROM (SELECT recovery_status,"
-                        + "ROW_NUMBER() OVER(PARTITION BY lower(trim(body_part)) ORDER BY marked_at DESC,id DESC) AS row_num "
-                        + "FROM injury_markers WHERE horse_id=?) latest WHERE row_num=1 AND recovery_status IN ('Active','Recovering')",
+                + "ROW_NUMBER() OVER(PARTITION BY lower(trim(body_part)) ORDER BY marked_at DESC,id DESC) AS row_num "
+                + "FROM injury_markers WHERE horse_id=?) latest WHERE row_num=1 AND recovery_status IN ('Active','Recovering')",
                 Long.class, horse);
         return count != null && count > 0;
     }
 
     private void notifyTrainingStaff(String horse, String message) {
         var recipients = data.db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
-                + "WHERE u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL AND r.role_name='HEAD_TRAINER'", Long.class);
-        for (long recipient : recipients) notifications.schedule(recipient, "Horses", horse, message, time.now());
+                + "WHERE u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL AND r.role_name='HEAD_TRAINER'",
+                Long.class);
+        for (long recipient : recipients)
+            notifications.schedule(recipient, "Horses", horse, message, time.now());
         var grooms = data.db.queryForList("SELECT DISTINCT u.user_id FROM training_schedules ts "
-                        + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id JOIN users u ON u.user_id=ts.assigned_groom_id "
-                        + "JOIN roles r ON r.role_id=u.role_id WHERE ts.horse_id=? AND ts.session_type IN ('Training','TrialRun') "
-                        + "AND ce.event_date>=? AND ce.status IN ('Scheduled','Blocked') AND r.role_name='GROOM' "
-                        + "AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL ORDER BY u.user_id",
+                + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id JOIN users u ON u.user_id=ts.assigned_groom_id "
+                + "JOIN roles r ON r.role_id=u.role_id WHERE ts.horse_id=? AND ts.session_type IN ('Training','TrialRun') "
+                + "AND ce.event_date>=? AND ce.status IN ('Scheduled','Blocked') AND r.role_name='GROOM' "
+                + "AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL ORDER BY u.user_id",
                 Long.class, horse, time.today());
-        for (long groom : grooms) notifications.schedule(groom, "Horses", horse, message, time.now());
+        for (long groom : grooms)
+            notifications.schedule(groom, "Horses", horse, message, time.now());
     }
 
     private List<Long> activeRecipients(String... roles) {
         String placeholders = String.join(",", Collections.nCopies(roles.length, "?"));
         return data.db.query("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
-                        + "WHERE r.role_name IN (" + placeholders + ") AND u.status='APPROVED' "
-                        + "AND u.deleted_at IS NULL AND u.must_change_password=FALSE ORDER BY u.user_id",
+                + "WHERE r.role_name IN (" + placeholders + ") AND u.status='APPROVED' "
+                + "AND u.deleted_at IS NULL AND u.must_change_password=FALSE ORDER BY u.user_id",
                 (row, index) -> row.getLong("user_id"), (Object[]) roles);
     }
 
     private void blockUpcomingSessions(String horse) {
         simulationRecorder.interruptHorse(horse, "Horse training locked");
         data.db.update("UPDATE training_schedules ts SET status='Blocked' FROM calendar_events ce "
-                        + "WHERE ce.id=ts.calendar_event_id AND ts.horse_id=? AND ts.status IN ('Scheduled','InProgress') "
-                        + "AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
+                + "WHERE ce.id=ts.calendar_event_id AND ts.horse_id=? AND ts.status IN ('Scheduled','InProgress') "
+                + "AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
                 horse, time.today());
         data.db.update("UPDATE calendar_events ce SET status='Blocked' FROM training_schedules ts "
-                        + "WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Blocked' "
-                        + "AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
+                + "WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Blocked' "
+                + "AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
                 horse, time.today());
     }
 }

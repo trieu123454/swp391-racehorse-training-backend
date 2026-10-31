@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 /** Typed allowlists used by partial updates; unknown and protected fields are ignored. */
 public final class VetInput {
+    private static final int MAX_UNBOUNDED_TEXT_CHARS = 16_384;
+
     private VetInput() {
     }
 
@@ -63,7 +65,8 @@ public final class VetInput {
                         if (!n.isTextual()) throw new IllegalArgumentException();
                         String s = n.textValue().trim();
                         int max = Integer.parseInt(parts[1]);
-                        if (max > 0 && s.codePointCount(0, s.length()) > max) throw new IllegalArgumentException();
+                        if (s.codePointCount(0, s.length()) > (max > 0 ? max : MAX_UNBOUNDED_TEXT_CHARS))
+                            throw new IllegalArgumentException();
                         value = s;
                     }
                 }

@@ -54,6 +54,11 @@ public class VetHorseController {
         return service.submitIncidentResult(p.getName(), r.getRemoteAddr(), id, body);
     }
 
+    @PatchMapping("/vet/stable-incidents/{id}/resolve")
+    public Map<String, Object> resolveIncident(Principal p, HttpServletRequest r, @PathVariable UUID id) {
+        return service.resolveIncident(p.getName(), r.getRemoteAddr(), id);
+    }
+
     @PatchMapping("/horses/{id}/health-status")
     public Map<String, Object> status(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
         return service.status(p.getName(), r.getRemoteAddr(), id.toString(), body);

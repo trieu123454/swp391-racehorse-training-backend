@@ -24,12 +24,16 @@ import com.example.springbootbackend.dto.request.RegisterRequest;
 import com.example.springbootbackend.dto.response.AuthResponse;
 import com.example.springbootbackend.dto.response.UserResponse;
 import com.example.springbootbackend.entity.AppUser;
+import com.example.springbootbackend.entity.AuditLog;
+import com.example.springbootbackend.entity.Notification;
 import com.example.springbootbackend.entity.RefreshToken;
 import com.example.springbootbackend.entity.Role;
 import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.exception.ApprovalPendingException;
 import com.example.springbootbackend.exception.AuthException;
 import com.example.springbootbackend.repository.AppUserRepository;
+import com.example.springbootbackend.repository.AuditLogRepository;
+import com.example.springbootbackend.repository.NotificationRepository;
 import com.example.springbootbackend.repository.RefreshTokenRepository;
 import com.example.springbootbackend.repository.RoleRepository;
 import com.example.springbootbackend.security.JwtProperties;
@@ -47,6 +51,8 @@ public class AuthService {
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
     private final GoogleTokenService googleTokenService;
+    private final AuditLogRepository auditLogRepository;
+    private final NotificationRepository notificationRepository;
 
     public AuthService(
             AppUserRepository userRepository,
@@ -56,7 +62,9 @@ public class AuthService {
             AuthenticationManager authenticationManager,
             JwtService jwtService,
             JwtProperties jwtProperties,
-            GoogleTokenService googleTokenService
+            GoogleTokenService googleTokenService,
+            AuditLogRepository auditLogRepository,
+            NotificationRepository notificationRepository
     ) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
@@ -66,6 +74,8 @@ public class AuthService {
         this.jwtService = jwtService;
         this.jwtProperties = jwtProperties;
         this.googleTokenService = googleTokenService;
+        this.auditLogRepository = auditLogRepository;
+        this.notificationRepository = notificationRepository;
     }
 
     @Transactional
@@ -131,6 +141,7 @@ public class AuthService {
             throw new AuthException("New password must be different from the current password");
         }
         user.changePassword(passwordEncoder.encode(request.newPassword()));
+        refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
         return createAuthResponse(user);
     }
 
@@ -153,14 +164,19 @@ public class AuthService {
             throw new AuthException("Refresh token is expired or revoked");
         }
 
-        ensureApproved(refreshToken.getUser());
+        AppUser user = refreshToken.getUser();
+        if (user == null || user.getDeletedAt() != null) {
+            throw new AuthException("Account is deleted");
+        }
+        ensureApproved(user);
         refreshToken.revoke();
-        return createAuthResponse(refreshToken.getUser());
+        return createAuthResponse(user, refreshToken.getSessionId());
     }
 
     @Transactional
     public void logout(String refreshTokenValue) {
-        refreshTokenRepository.findByToken(refreshTokenValue).ifPresent(RefreshToken::revoke);
+        refreshTokenRepository.findByToken(refreshTokenValue)
+                .ifPresent(token -> refreshTokenRepository.revokeActiveTokensBySessionId(token.getSessionId()));
     }
 
     @Transactional
@@ -170,6 +186,8 @@ public class AuthService {
                 .orElseThrow(() -> new AuthException("User not found"));
         ensurePendingStaff(user);
         user.approve(approver);
+        recordReviewAuditAndNotification(approver.getId(), user.getId(), "APPROVE_USER: " + user.getId(),
+                "Tài khoản của bạn đã được Club Manager phê duyệt.");
         return UserResponse.from(user);
     }
 
@@ -180,14 +198,42 @@ public class AuthService {
                 .orElseThrow(() -> new AuthException("User not found"));
         ensurePendingStaff(user);
         user.reject(approver);
+        refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+        recordReviewAuditAndNotification(approver.getId(), user.getId(), "REJECT_USER: " + user.getId(),
+                "Tài khoản của bạn đã bị từ chối bởi Club Manager.");
         return UserResponse.from(user);
     }
 
+    private void recordReviewAuditAndNotification(Long managerId, Long targetUserId, String action, String message) {
+        LocalDateTime now = LocalDateTime.now();
+        AuditLog log = new AuditLog();
+        log.setId(UUID.randomUUID().toString());
+        log.setUserId(managerId);
+        log.setActionPerformed(action);
+        log.setCreatedAt(now);
+        auditLogRepository.save(log);
+
+        Notification notification = new Notification();
+        notification.setId(UUID.randomUUID().toString());
+        notification.setUserId(targetUserId);
+        notification.setRelatedTable("users");
+        notification.setRelatedId(String.valueOf(targetUserId));
+        notification.setMessage(message);
+        notification.setRead(false);
+        notification.setCreatedAt(now);
+        notificationRepository.save(notification);
+    }
+
     private AuthResponse createAuthResponse(AppUser user) {
-        String accessToken = jwtService.createAccessToken(user);
+        return createAuthResponse(user, UUID.randomUUID().toString());
+    }
+
+    private AuthResponse createAuthResponse(AppUser user, String sessionId) {
+        String accessToken = jwtService.createAccessToken(user, sessionId);
         String refreshTokenValue = UUID.randomUUID().toString() + UUID.randomUUID();
         RefreshToken refreshToken = new RefreshToken(
                 user,
+                sessionId,
                 refreshTokenValue,
                 LocalDateTime.now().plusDays(jwtProperties.refreshTokenDays())
         );

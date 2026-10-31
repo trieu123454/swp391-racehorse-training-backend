@@ -130,13 +130,20 @@ public class ClubManagerService {
     }
 
     @Transactional(readOnly = true)
-    public List<PendingUserResponse> users(String managerEmail, String status, String role) {
-        requireManager(managerEmail);
+    public List<PendingUserResponse> users(String actorEmail, String status, String role) {
         String requestedStatus = StringUtils.hasText(status) ? status.trim().toUpperCase(Locale.ROOT) : "APPROVED";
         if (!List.of("APPROVED", "LOCKED", "REJECTED").contains(requestedStatus)) {
             throw new ResponseStatusException(BAD_REQUEST, "status không hợp lệ");
         }
-        String normalizedRole = StringUtils.hasText(role) ? role.trim().toUpperCase(Locale.ROOT) : null;
+        String normalizedRole = normalizeUserRoleFilter(role);
+        String actorRole = requireActiveUserRole(actorEmail);
+        if ("HEAD_TRAINER".equals(actorRole)) {
+            if (!"APPROVED".equals(requestedStatus) || !"HORSE_OWNER".equals(normalizedRole)) {
+                throw new ResponseStatusException(FORBIDDEN, "Chỉ Club Manager đã được duyệt mới được thao tác");
+            }
+        } else if (!"CLUB_MANAGER".equals(actorRole)) {
+            throw new ResponseStatusException(FORBIDDEN, "Chỉ Club Manager đã được duyệt mới được thao tác");
+        }
         String roleClause = normalizedRole == null ? "" : " AND r.role_name=?";
         var args = new ArrayList<Object>();
         args.add(requestedStatus);
@@ -146,6 +153,24 @@ public class ClubManagerService {
                         + roleClause + " ORDER BY u.full_name,u.user_id", args.toArray()).stream()
                 .map(ClubManagerService::toPendingUserResponse)
                 .toList();
+    }
+
+    private static String normalizeUserRoleFilter(String role) {
+        if (!StringUtils.hasText(role)) return null;
+        String trimmed = role.trim();
+        if ("HorseOwner".equalsIgnoreCase(trimmed)) return "HORSE_OWNER";
+        if ("HeadTrainer".equalsIgnoreCase(trimmed)) return "HEAD_TRAINER";
+        if ("ClubManager".equalsIgnoreCase(trimmed)) return "CLUB_MANAGER";
+        return trimmed.toUpperCase(Locale.ROOT);
+    }
+
+    private String requireActiveUserRole(String email) {
+        List<Map<String, Object>> rows = db.queryForList(
+                "SELECT r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id "
+                        + "WHERE lower(u.email)=lower(?) AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL",
+                email);
+        if (rows.isEmpty()) throw new ResponseStatusException(FORBIDDEN, "Chỉ Club Manager đã được duyệt mới được thao tác");
+        return (String) rows.getFirst().get("role_name");
     }
 
     private static PendingUserResponse toPendingUserResponse(Map<String, Object> row) {
@@ -207,6 +232,7 @@ public class ClubManagerService {
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='REJECTED', approved_by=?, approved_at=?, updated_at=? WHERE user_id=? AND status='PENDING'",
                 managerId, now, now, userId);
+        revokeActiveRefreshTokens(userId);
         String message = StringUtils.hasText(reason)
                 ? "Tài khoản bị từ chối. Lý do: " + reason.trim()
                 : "Tài khoản của bạn đã bị từ chối bởi Club Manager.";
@@ -251,6 +277,7 @@ public class ClubManagerService {
                 assertNoUpcomingGroomAssignments(userId);
             db.update("UPDATE users SET role_id=?, updated_at=? WHERE user_id=?", request.get("requested_role_id"), now, userId);
             db.update("UPDATE role_change_requests SET status='Approved',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
+            revokeActiveRefreshTokens(userId);
             notifyUser(userId, "Yêu cầu đổi vai trò của bạn đã được phê duyệt.");
         } else {
             db.update("UPDATE role_change_requests SET status='Rejected',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
@@ -276,6 +303,7 @@ public class ClubManagerService {
         if ("GROOM".equals(targetRole)) assertNoUpcomingGroomAssignments(userId);
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='LOCKED', updated_at=? WHERE user_id=? AND status='APPROVED'", now, userId);
+        revokeActiveRefreshTokens(userId);
         String message = StringUtils.hasText(reason) ? "Tài khoản đã bị khóa. Lý do: " + reason.trim() : "Tài khoản của bạn đã bị khóa.";
         notifyUser(userId, message);
         audit(managerId, "LOCK_USER: " + userId + (StringUtils.hasText(reason) ? " - " + reason.trim() : ""));
@@ -329,6 +357,7 @@ public class ClubManagerService {
         Integer targetRoleId = db.queryForObject("SELECT role_id FROM roles WHERE role_name=?", Integer.class, normalizedRole);
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET role_id=?,updated_at=? WHERE user_id=? AND status='APPROVED'", targetRoleId, now, userId);
+        revokeActiveRefreshTokens(userId);
         notifyUser(userId, "Vai trò của bạn đã được Club Manager đổi từ " + currentRole + " sang " + normalizedRole + ". Vui lòng đăng nhập lại để áp dụng quyền mới.");
         audit(managerId, "UPDATE_USER_ROLE: " + userId + " " + currentRole + " -> " + normalizedRole);
         return Map.of("id", userId, "previous_role", currentRole, "role_name", normalizedRole);
@@ -344,29 +373,34 @@ public class ClubManagerService {
                 + "WHERE u.status='APPROVED' AND u.deleted_at IS NULL "
                 + "AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM','CLUB_MANAGER') "
                 + "GROUP BY r.role_name ORDER BY r.role_name");
-        Long scheduledSessions = db.queryForObject("SELECT count(*) FROM calendar_events WHERE event_type IN ('Training','TrialRun','Rest') "
-                + "AND status IN ('Scheduled','InProgress','Blocked') AND event_date>=? AND event_date<=?", Long.class, start, end);
+        Long scheduledSessions = db.queryForObject("SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
+                + "WHERE h.deleted_at IS NULL AND ce.event_type IN ('Training','TrialRun','Rest') "
+                + "AND ce.status IN ('Scheduled','InProgress','Blocked') AND ce.event_date>=? AND ce.event_date<=?", Long.class, start, end);
         Long totalTasks = db.queryForObject("SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
-                + "WHERE ce.event_date>=? AND ce.event_date<=?", Long.class, start, end);
+                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?", Long.class, start, end);
         Long completedTasks = db.queryForObject("SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
-                + "WHERE ce.event_date>=? AND ce.event_date<=? AND t.status='Completed'", Long.class, start, end);
-        Long pendingIncidents = db.queryForObject("SELECT count(*) FROM stable_incidents WHERE status IN ('Pending','InProgress','AwaitingClosure')", Long.class);
+                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=? AND t.status='Completed'", Long.class, start, end);
+        Long pendingIncidents = db.queryForObject("SELECT count(*) FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
+                + "WHERE h.deleted_at IS NULL AND i.status IN ('Pending','InProgress','AwaitingClosure')", Long.class);
         Map<String, Object> training = db.queryForList("SELECT count(*) FILTER (WHERE ts.status='Scheduled') AS scheduled,"
                 + "count(*) FILTER (WHERE ts.status='Completed') AS completed,"
                 + "count(*) FILTER (WHERE ts.status='InProgress') AS in_progress,"
                 + "count(*) FILTER (WHERE ts.status='Cancelled') AS cancelled,"
                 + "count(*) FILTER (WHERE ts.status='Blocked') AS blocked FROM training_schedules ts "
-                + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ce.event_date>=? AND ce.event_date<=?", start, end).getFirst();
+                + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id JOIN horses h ON h.id=ts.horse_id "
+                + "WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?", start, end).getFirst();
         Map<String, Object> finances = db.queryForList("SELECT "
-                + "COALESCE(SUM(amount) FILTER (WHERE lower(transaction_type)='care'),0) AS care_cost,"
-                + "COALESCE(SUM(amount) FILTER (WHERE lower(transaction_type)='medical'),0) AS medical_cost,"
-                + "COALESCE(SUM(amount) FILTER (WHERE lower(transaction_type)='prize'),0) AS prize_income,"
-                + "COALESCE(SUM(amount) FILTER (WHERE lower(transaction_type)='other'),0) AS other_amount "
-                + "FROM financial_reports WHERE billing_period>=? AND billing_period<=?",
+                + "COALESCE(SUM(fr.amount) FILTER (WHERE lower(fr.transaction_type)='care'),0) AS care_cost,"
+                + "COALESCE(SUM(fr.amount) FILTER (WHERE lower(fr.transaction_type)='medical'),0) AS medical_cost,"
+                + "COALESCE(SUM(fr.amount) FILTER (WHERE lower(fr.transaction_type)='prize'),0) AS prize_income,"
+                + "COALESCE(SUM(fr.amount) FILTER (WHERE lower(fr.transaction_type)='other'),0) AS other_amount "
+                + "FROM financial_reports fr JOIN horses h ON h.id=fr.horse_id "
+                + "WHERE h.deleted_at IS NULL AND fr.billing_period>=? AND fr.billing_period<=?",
                 YearMonth.from(start).toString(), YearMonth.from(end).toString()).getFirst();
         Map<String, Object> competition = db.queryForList("SELECT count(*) FILTER (WHERE e.status='Registered') AS registered,"
                 + "count(*) FILTER (WHERE e.status='Completed') AS completed "
-                + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id WHERE r.race_date>=? AND r.race_date<=? "
+                + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id JOIN horses h ON h.id=e.horse_id "
+                + "WHERE h.deleted_at IS NULL AND r.race_date>=? AND r.race_date<=? "
                 + "AND r.is_simulated=FALSE", start, end).getFirst();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("from", start); result.put("to", end); result.put("horses_by_health_status", health);
@@ -448,7 +482,7 @@ public class ClubManagerService {
             throw VetException.invalid("task_type", "Values: Feeding, Cleaning, Bathing, IceBath");
         if (taskDate.isBefore(time.today().minusDays(1)) || taskDate.isAfter(time.today().plusDays(60)))
             throw VetException.invalid("task_date", "Task date must be within the next 60 days");
-        if (db.queryForObject("SELECT count(*) FROM horses WHERE id=? AND deleted_at IS NULL", Long.class, horseId) == 0)
+        if (db.queryForList("SELECT id FROM horses WHERE id=? AND deleted_at IS NULL FOR UPDATE", horseId).isEmpty())
             throw new ResponseStatusException(NOT_FOUND, "Horse not found");
         var grooms = db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
                 + "WHERE u.user_id=? AND r.role_name='GROOM' AND u.status='APPROVED' AND u.must_change_password=FALSE "
@@ -687,6 +721,10 @@ public class ClubManagerService {
         List<Map<String, Object>> rows = db.queryForList("SELECT u.user_id,u.status,r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=? AND u.deleted_at IS NULL", userId);
         if (rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy tài khoản");
         return rows.getFirst();
+    }
+
+    private void revokeActiveRefreshTokens(Long userId) {
+        db.update("UPDATE refresh_tokens SET revoked=TRUE WHERE user_id=? AND revoked=FALSE", userId);
     }
 
     private void assertNoUpcomingGroomAssignments(Long userId) {

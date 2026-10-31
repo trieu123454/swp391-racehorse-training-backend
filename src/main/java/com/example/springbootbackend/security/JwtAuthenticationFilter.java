@@ -2,6 +2,7 @@ package com.example.springbootbackend.security;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -12,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.repository.AppUserRepository;
+import com.example.springbootbackend.repository.RefreshTokenRepository;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -23,10 +25,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final AppUserRepository users;
+    private final RefreshTokenRepository refreshTokens;
 
-    public JwtAuthenticationFilter(JwtService jwtService, AppUserRepository users) {
+    public JwtAuthenticationFilter(JwtService jwtService, AppUserRepository users, RefreshTokenRepository refreshTokens) {
         this.jwtService = jwtService;
         this.users = users;
+        this.refreshTokens = refreshTokens;
     }
 
     @Override
@@ -40,6 +44,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 var user = users.findByEmailIgnoreCase(email).orElse(null);
                 if (user == null || user.getDeletedAt() != null
                         || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
+                if (!(claims.get("sessionId") instanceof String sessionId)
+                        || !refreshTokens.existsBySessionIdAndRevokedFalseAndExpiresAtAfter(sessionId, LocalDateTime.now())) return;
                 if (user.getStatus() != UserStatus.APPROVED) {
                     if (VetHttpSecurity.applies(request)) {
                         try {

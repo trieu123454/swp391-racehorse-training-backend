@@ -108,7 +108,7 @@ public class GroomWorkspaceService {
     public Map<String, Object> completeTrainingSession(String email, String ip, UUID scheduleId) {
         long groomId = access.requireRole(email, "GROOM");
         String id = scheduleId.toString();
-        var rows = db.query("SELECT ts.id,ts.calendar_event_id,ts.assigned_groom_id,ts.status,ts.session_type,ts.created_by,"
+        var rows = db.query("SELECT ts.id,ts.horse_id,ts.calendar_event_id,ts.assigned_groom_id,ts.status,ts.session_type,ts.created_by,"
                         + "ce.event_date,ce.end_time,h.horse_name FROM training_schedules ts "
                         + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
                         + "JOIN horses h ON h.id=ts.horse_id WHERE ts.id=? AND h.deleted_at IS NULL FOR UPDATE OF ts",
@@ -116,8 +116,14 @@ public class GroomWorkspaceService {
         if (rows.isEmpty()) throw new VetException(404, "SCHEDULE_NOT_FOUND", "Training session not found");
         Map<String, Object> session = rows.getFirst();
         Object assignedGroom = session.get("assigned_groom_id");
-        if (!(assignedGroom instanceof Number assigned) || assigned.longValue() != groomId)
-            throw new VetException(403, "FORBIDDEN", "Training session is not assigned to this Groom");
+        boolean assignedToCurrentGroom = assignedGroom instanceof Number assigned && assigned.longValue() == groomId;
+        if (!assignedToCurrentGroom) {
+            if ("Rest".equals(session.get("session_type")) && assignedGroom == null) {
+                horses.requireAssignedHorse(groomId, session.get("horse_id").toString());
+            } else {
+                throw new VetException(403, "FORBIDDEN", "Training session is not assigned to this Groom");
+            }
+        }
         if ("Completed".equals(session.get("status"))) {
             Map<String, Object> response = db.query("SELECT id,status FROM training_schedules WHERE id=?",
                     VetRows.MAPPER, id).getFirst();

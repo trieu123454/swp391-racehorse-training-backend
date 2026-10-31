@@ -5,7 +5,10 @@ import com.example.springbootbackend.controller.HorseOwnerRegistrationController
 import com.example.springbootbackend.controller.HorseRegistrationReviewController;
 
 import java.util.Map;
+import java.util.Objects;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.*;
+import org.springframework.validation.FieldError;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -20,7 +23,16 @@ public class HorseExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<?> validation(MethodArgumentNotValidException e) {
-        return ResponseEntity.badRequest().body(Map.of("message", e.getBindingResult().getFieldErrors().getFirst().getDefaultMessage()));
+        String message = e.getBindingResult().getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .or(() -> e.getBindingResult().getAllErrors().stream()
+                        .map(DefaultMessageSourceResolvable::getDefaultMessage)
+                        .filter(Objects::nonNull)
+                        .findFirst())
+                .orElse("Dữ liệu không hợp lệ");
+        return ResponseEntity.badRequest().body(Map.of("message", message));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

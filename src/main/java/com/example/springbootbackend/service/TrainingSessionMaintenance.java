@@ -1,5 +1,7 @@
 package com.example.springbootbackend.service;
 
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -45,7 +47,8 @@ public class TrainingSessionMaintenance {
             }
         }
         // The service updates calendar and schedule states within the same transaction.
-        var expired = trainingSchedules.findScheduledNonRestIdsUpToDate(time.today());
+        LocalTime nowTime = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE).toLocalTime();
+        var expired = trainingSchedules.findScheduledNonRestIdsUpTo(time.today(), nowTime);
         for (String id : expired) {
             try {
                 simulations.expireSchedule(UUID.fromString(id.stripTrailing()));

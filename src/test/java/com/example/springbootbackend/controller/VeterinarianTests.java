@@ -61,6 +61,12 @@ class VeterinarianTests {
     void addUser(String email, String role) { db.update("INSERT INTO users(full_name,email,password_hash,role_id,status) SELECT ?,?,'hash',role_id,'APPROVED' FROM roles WHERE role_name=?", email, email, role); }
     long uid(String email) { return db.queryForObject("SELECT user_id FROM users WHERE email=?", Long.class, email); }
     ResultActions call(MockHttpServletRequestBuilder request) throws Exception { return mvc.perform(request.with(user(VET).roles("VETERINARIAN"))); }
+    String sessionToken(String email) {
+        String sessionId = UUID.randomUUID().toString();
+        db.update("INSERT INTO refresh_tokens(user_id,session_id,token,expires_at) VALUES (?,?,?,?)",
+                uid(email), sessionId, UUID.randomUUID().toString(), LocalDateTime.now().plusDays(1));
+        return jwt.createAccessToken(users.findByEmailIgnoreCase(email).orElseThrow(), sessionId);
+    }
     MockHttpServletRequestBuilder body(MockHttpServletRequestBuilder request, Object body) throws Exception { return request.contentType("application/json").content(json.writeValueAsString(body)); }
     JsonNode result(ResultActions result) throws Exception { return json.readTree(result.andReturn().getResponse().getContentAsString()); }
     Map<String, Object> exam() { return new LinkedHashMap<>(Map.of("temperature_c", 38.9, "heart_rate", 42, "respiratory_rate", 12)); }
@@ -80,7 +86,7 @@ class VeterinarianTests {
     }
 
     @Test void realJwtUsesCurrentRoleAndStatus() throws Exception {
-        String token = jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        String token = sessionToken(VET);
         String path = "/api/horses/" + horse + "/health-exams";
         mvc.perform(get(path).header("Authorization", "Bearer " + token)).andExpect(status().isOk());
         db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='GROOM') WHERE email=?", VET);

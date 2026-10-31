@@ -87,7 +87,7 @@ public class HorseController {
                                       @RequestParam(defaultValue = "") String q,
                                       @RequestParam(defaultValue = "0") int page,
                                       @RequestParam(defaultValue = "20") int size) {
-        horses.actor(p.getName(), true);
+        horses.ownerLookupActor(p.getName());
         return horses.owners(q, page, size);
     }
 

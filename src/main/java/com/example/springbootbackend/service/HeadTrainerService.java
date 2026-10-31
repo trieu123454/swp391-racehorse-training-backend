@@ -475,7 +475,7 @@ public class HeadTrainerService {
         if (!"Rest".equals(fields.get("session_type"))) {
             trainingGuard.assertHorseNotLocked(horse);
             VetInput.required(fields, "training_plan_id");
-        } else access.requireHorse(horse, false);
+        } else access.requireHorse(horse, true);
         VetInput.required(fields, "event_date", "start_time", "end_time");
         LocalDate date = (LocalDate) fields.get("event_date");
         LocalTime start = (LocalTime) fields.get("start_time");
