@@ -2,6 +2,7 @@ package com.example.springbootbackend.controller;
 
 import java.security.Principal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -89,5 +90,10 @@ public class CareScheduleController {
     @PostMapping("/periodic-care-schedules/{id}/complete")
     public Map<String, Object> complete(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody(required = false) JsonNode body) {
         return service.complete(p.getName(), r.getRemoteAddr(), id.toString(), body == null ? JsonNodeFactory.instance.objectNode() : body);
+    }
+
+    @GetMapping("/veterinarians")
+    public List<Map<String, Object>> veterinarians(Principal p) {
+        return service.veterinarians(p.getName());
     }
 }

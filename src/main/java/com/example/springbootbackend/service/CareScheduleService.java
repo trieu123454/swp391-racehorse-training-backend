@@ -305,6 +305,16 @@ public class CareScheduleService {
         return result;
     }
 
+    public List<Map<String, Object>> veterinarians(String email) {
+        access.requireRole(email, "VETERINARIAN");
+        return data.db.queryForList(
+                "SELECT u.user_id AS id, u.full_name AS name, u.email "
+                + "FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE r.role_name='VETERINARIAN' AND u.status='APPROVED' AND u.deleted_at IS NULL "
+                + "ORDER BY u.full_name, u.user_id"
+        );
+    }
+
     private void requireNoConflicts(String horse, long doctor, LocalDate date, LocalTime start, LocalTime end, String exclude) {
         var conflicting = conflicts.checkCalendarConflicts(horse, date, start, end, exclude, doctor, "VETERINARIAN");
         if (!conflicting.isEmpty())
