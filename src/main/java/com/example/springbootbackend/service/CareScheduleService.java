@@ -230,7 +230,7 @@ public class CareScheduleService {
         validateCare(care);
         if (horse != null) access.requireHorse(horse, false);
         if (days != null && days < 0) throw VetException.invalid("due_within_days", "Phải >= 0");
-        String from = " FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id";
+        String from = " FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id LEFT JOIN users u ON u.user_id=p.assigned_doctor_id";
         String where = " WHERE h.deleted_at IS NULL";
         var args = new ArrayList<Object>();
         if (horse != null) {
@@ -245,7 +245,7 @@ public class CareScheduleService {
             where += " AND p.next_due_date<=?";
             args.add(nextDate(time.today(), days));
         }
-        var result = data.page("SELECT p.*,ce.status AS event_status" + from, "SELECT count(*)" + from, where, " ORDER BY p.next_due_date,p.id", args, page);
+        var result = data.page("SELECT p.*,ce.status AS event_status,u.full_name AS doctor_name" + from, "SELECT count(*)" + from, where, " ORDER BY p.next_due_date,p.id", args, page);
         for (Object value : (List<?>) result.get("data")) {
             @SuppressWarnings("unchecked") var row = (Map<String, Object>) value;
             row.put("is_overdue", ((LocalDate) row.get("next_due_date")).isBefore(time.today()) && !"Completed".equals(row.remove("event_status")));
