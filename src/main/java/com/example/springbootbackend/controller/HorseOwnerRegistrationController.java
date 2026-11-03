@@ -41,7 +41,7 @@ public class HorseOwnerRegistrationController {
 
     @PatchMapping(value = "/{requestId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> resubmit(Principal principal, HttpServletRequest request,
-            @PathVariable String requestId,
+            @PathVariable("requestId") String requestId,
             @RequestPart("request") JsonNode body,
             @RequestPart(value = "horseImage", required = false) MultipartFile horseImage,
             @RequestPart(value = "documents", required = false) List<MultipartFile> documents,

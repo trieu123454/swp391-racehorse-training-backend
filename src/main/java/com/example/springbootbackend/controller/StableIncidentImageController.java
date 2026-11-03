@@ -41,7 +41,7 @@ public class StableIncidentImageController {
     }
 
     @GetMapping("/{id}/image")
-    public Map<String, Object> image(Principal principal, @PathVariable UUID id) {
+    public Map<String, Object> image(Principal principal, @PathVariable("id") UUID id) {
         AppUser account = users.findByEmailIgnoreCase(principal.getName())
                 .filter(u -> u.getStatus() == UserStatus.APPROVED && !u.isMustChangePassword() && u.getDeletedAt() == null)
                 .orElseThrow(() -> new ResponseStatusException(FORBIDDEN, "Active account required"));

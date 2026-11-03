@@ -32,7 +32,7 @@ public class HorseOwnershipConsentController {
 
     @PatchMapping("/{requestId}/consent")
     public Map<String, Object> respond(Principal principal, HttpServletRequest request,
-            @PathVariable String requestId, @RequestBody JsonNode body) {
+            @PathVariable("requestId") String requestId, @RequestBody JsonNode body) {
         return service.respondToTransfer(principal.getName(), requestId, body, request.getRemoteAddr());
     }
 }

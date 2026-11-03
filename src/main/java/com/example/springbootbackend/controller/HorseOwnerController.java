@@ -29,8 +29,8 @@ public class HorseOwnerController {
     }
 
     @GetMapping("/horses/{horseId}/dashboard")
-    public Map<String, Object> dashboard(Principal principal, @PathVariable UUID horseId,
-            @RequestParam(required = false) Integer year) {
+    public Map<String, Object> dashboard(Principal principal, @PathVariable("horseId") UUID horseId,
+            @RequestParam(name = "year", required = false) Integer year) {
         return service.dashboard(principal.getName(), horseId, year);
     }
 }

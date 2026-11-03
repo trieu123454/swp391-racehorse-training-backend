@@ -27,7 +27,7 @@ public class HorseRegistrationReviewController {
 
     @PatchMapping("/{requestId}")
     public Map<String, Object> review(Principal principal, HttpServletRequest request,
-            @PathVariable String requestId, @RequestBody JsonNode body) {
+            @PathVariable("requestId") String requestId, @RequestBody JsonNode body) {
         return service.review(principal.getName(), requestId, body, request.getRemoteAddr());
     }
 }
