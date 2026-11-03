@@ -35,42 +35,42 @@ public class VetHorseController {
     }
 
     @GetMapping("/vet/health-overview")
-    public Map<String, Object> overview(Principal p, @RequestParam(required = false) String section) {
+    public Map<String, Object> overview(Principal p, @RequestParam(name = "section", required = false) String section) {
         return service.overview(p.getName(), section);
     }
 
     @GetMapping("/vet/stable-incidents")
-    public Map<String, Object> incidents(Principal p, @RequestParam(defaultValue = "Open") String status) {
+    public Map<String, Object> incidents(Principal p, @RequestParam(name = "status", defaultValue = "Open") String status) {
         return service.incidents(p.getName(), status);
     }
 
     @PatchMapping("/vet/stable-incidents/{id}/claim")
-    public Map<String, Object> claimIncident(Principal p, HttpServletRequest r, @PathVariable UUID id) {
+    public Map<String, Object> claimIncident(Principal p, HttpServletRequest r, @PathVariable("id") UUID id) {
         return service.claimEmergency(p.getName(), r.getRemoteAddr(), id);
     }
 
     @PatchMapping("/vet/stable-incidents/{id}/result")
-    public Map<String, Object> submitIncidentResult(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> submitIncidentResult(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.submitIncidentResult(p.getName(), r.getRemoteAddr(), id, body);
     }
 
     @PatchMapping("/vet/stable-incidents/{id}/resolve")
-    public Map<String, Object> resolveIncident(Principal p, HttpServletRequest r, @PathVariable UUID id) {
+    public Map<String, Object> resolveIncident(Principal p, HttpServletRequest r, @PathVariable("id") UUID id) {
         return service.resolveIncident(p.getName(), r.getRemoteAddr(), id);
     }
 
     @PatchMapping("/horses/{id}/health-status")
-    public Map<String, Object> status(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> status(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.status(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 
     @PutMapping("/horses/{id}/training-lock")
-    public Map<String, Object> lock(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> lock(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.lock(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 
     @PostMapping("/horses/{id}/training-unlock")
-    public Map<String, Object> unlock(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> unlock(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.unlock(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 }

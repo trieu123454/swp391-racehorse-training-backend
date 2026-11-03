@@ -55,6 +55,8 @@ public class ClubManagerService {
     private final RaceRepository raceRepository;
     private final CalendarEventRepository calendarEventRepository;
     private final DailyTaskLogRepository dailyTaskLogRepository;
+    private final EmailService emailService;
+    private final SmsService smsService;
 
     public ClubManagerService(VetData db, PasswordEncoder passwordEncoder, VetTime time,
                               AuditLogRepository auditLogRepository,
@@ -62,7 +64,9 @@ public class ClubManagerService {
                               FinancialReportRepository financialReportRepository,
                               RaceRepository raceRepository,
                               CalendarEventRepository calendarEventRepository,
-                              DailyTaskLogRepository dailyTaskLogRepository) {
+                              DailyTaskLogRepository dailyTaskLogRepository,
+                              EmailService emailService,
+                              SmsService smsService) {
         this.db = db;
         this.passwordEncoder = passwordEncoder;
         this.time = time;
@@ -72,6 +76,8 @@ public class ClubManagerService {
         this.raceRepository = raceRepository;
         this.calendarEventRepository = calendarEventRepository;
         this.dailyTaskLogRepository = dailyTaskLogRepository;
+        this.emailService = emailService;
+        this.smsService = smsService;
     }
 
     @Transactional
@@ -92,14 +98,23 @@ public class ClubManagerService {
 
         Integer roleId = db.queryForObject("SELECT role_id FROM roles WHERE role_name=?", Integer.class, role);
         LocalDateTime now = time.utcNow();
-        Long userId = db.queryForObject(
+        db.update(
                 "INSERT INTO users(full_name,email,phone,password_hash,role_id,status,approved_by,approved_at,must_change_password,created_at,updated_at) "
-                        + "VALUES (?,?,?,?,?,'APPROVED',?,?,TRUE,?,?) RETURNING user_id",
-                Long.class,
+                        + "VALUES (?,?,?,?,?,'APPROVED',?,?,TRUE,?,?)",
                 request.fullName().trim(), email, request.phone(), passwordEncoder.encode(request.password()),
                 roleId, managerId, now, now, now);
+        Long userId = db.queryForObject("SELECT user_id FROM users WHERE lower(email)=lower(?)", Long.class, email);
 
         audit(managerId, "CREATE_STAFF_ACCOUNT: " + userId + " " + role);
+
+        // Gửi email và SMS chứa thông tin tài khoản và mật khẩu tạm thời
+        emailService.sendStaffAccountCreated(email, request.fullName().trim(), role, request.password(), request.phone());
+        smsService.sendStaffAccountCreated(request.phone(), email, request.password());
+
+        // Tạo thông báo trong hệ thống cho người dùng
+        notifyUser(userId, "Tài khoản của bạn đã được khởi tạo bởi Ban Quản lý. Mật khẩu tạm thời: "
+                + request.password() + ". Vui lòng đổi mật khẩu ở lần đăng nhập đầu tiên.");
+
         return Map.of("id", userId, "email", email, "role_name", role, "status", "APPROVED", "must_change_password", true);
     }
 

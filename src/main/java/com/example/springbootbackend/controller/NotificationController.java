@@ -34,14 +34,14 @@ public class NotificationController {
     public Map<String, Object> list(
             Principal user,
             @RequestParam(name = "unread_only", defaultValue = "false") boolean unreadOnly,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int limit
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "limit", defaultValue = "20") int limit
     ) {
         return service.list(user.getName(), unreadOnly, new ApiPage(page, limit));
     }
 
     @PatchMapping("/{id}/read")
-    public Map<String, Object> read(Principal user, HttpServletRequest request, @PathVariable UUID id) {
+    public Map<String, Object> read(Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
         return service.read(user.getName(), request.getRemoteAddr(), id);
     }
 
