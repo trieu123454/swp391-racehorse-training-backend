@@ -43,7 +43,7 @@ public class VetHorseService {
     public Map<String, Object> overview(String email, String section) {
         access.requireRole(email, "VETERINARIAN");
         String query = "SELECT h.id,h.horse_name,h.image_url,h.current_status,h.readiness_status,h.is_training_locked,h.lock_level,h.lock_reason,"
-                + "s.id AS box_id,s.box_code,s.section FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id WHERE h.deleted_at IS NULL";
+                + "s.id AS box_id,s.box_code,s.section,COALESCE(s.box_type,'Normal') AS box_type FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id WHERE h.deleted_at IS NULL";
         var args = new ArrayList<Object>();
         if (section != null) {
             query += " AND s.section=?";
@@ -57,14 +57,21 @@ public class VetHorseService {
         for (var row : rows) {
             String status = row.get("current_status").toString();
             counts.computeIfPresent(status, (key, value) -> value + 1);
-            Object box = row.remove("box_id"), code = row.remove("box_code"), boxSection = row.remove("section");
+            Object box = row.remove("box_id"), code = row.remove("box_code"), boxSection = row.remove("section"), boxType = row.remove("box_type");
             Map<String, Object> stable = new LinkedHashMap<>();
             stable.put("id", box);
             stable.put("box_code", code);
             stable.put("section", boxSection);
+            stable.put("box_type", boxType);
             row.put("stable_box", box == null ? null : stable);
         }
-        return Map.of("counts", counts, "horses", rows);
+        List<Map<String, Object>> stables = data.db.query(
+                "SELECT s.id, s.box_code, s.section, COALESCE(s.box_type, 'Normal') AS box_type, s.capacity, s.status, "
+                        + "(SELECT count(*) FROM horses h WHERE h.stable_box_id = s.id AND h.deleted_at IS NULL) AS occupied "
+                        + "FROM stable_boxes s "
+                        + "ORDER BY CASE s.box_type WHEN 'Quarantine' THEN 1 WHEN 'Injury' THEN 2 ELSE 3 END, s.section, s.box_code",
+                VetRows.MAPPER);
+        return Map.of("counts", counts, "horses", rows, "stables", stables);
     }
 
     public Map<String, Object> incidents(String email, String requestedStatus) {
@@ -167,8 +174,11 @@ public class VetHorseService {
             throw new VetException(404, "INCIDENT_NOT_FOUND", "Incident not found");
         Map<String, Object> incident = rows.getFirst();
         Object assignedTo = incident.get("assigned_to");
-        if (assignedTo instanceof Number assigned && assigned.longValue() != vetId)
+        // Bác sĩ chỉ được đóng sự cố đã giao cho chính mình (trước đây sự cố chưa giao ai cũng đóng được).
+        if (!(assignedTo instanceof Number assigned) || assigned.longValue() != vetId)
             throw new VetException(403, "FORBIDDEN", "Incident is not assigned to this veterinarian");
+        if (incident.get("result_note") == null || incident.get("result_note").toString().isBlank())
+            throw new VetException(409, "RESULT_REQUIRED", "Cần gửi kết quả xử lý trước khi đóng sự cố");
         if (!List.of("InProgress", "AwaitingClosure").contains(incident.get("status")))
             throw new VetException(409, "INCIDENT_NOT_OPEN", "Incident cannot be resolved in its current state");
         data.db.update("UPDATE stable_incidents SET status='Resolved',reviewed_by=?,resolved_at=? WHERE id=?",
@@ -224,6 +234,7 @@ public class VetHorseService {
             updates.put("lock_reason", "Medical status: " + status);
         }
         data.updateRow("horses", horse, updates);
+        Map<String, Object> relocation = relocateForMedicalStatus(horse, old, status);
         if (newlyLocked) {
             blockUpcomingSessions(horse);
             notifyTrainingStaff(horse,
@@ -239,6 +250,7 @@ public class VetHorseService {
         result.put("lock_level", newlyLocked ? "Critical" : old.get("lock_level"));
         result.put("lock_reason", newlyLocked ? updates.get("lock_reason") : old.get("lock_reason"));
         result.put("suggest_lock", false);
+        result.put("stable_relocation", relocation);
         result.put("upcoming_sessions",
                 data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
                         + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
@@ -270,7 +282,7 @@ public class VetHorseService {
         result.put("upcoming_sessions",
                 data.db.query("SELECT ts.id AS training_schedule_id,ce.event_date,ce.start_time,ts.session_type "
                         + "FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id WHERE ts.horse_id=? "
-                        + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ce.event_type IN ('Training','TrialRun') ORDER BY ce.event_date,ce.start_time,ce.id",
+                        + "AND ce.status IN ('Scheduled','Blocked') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun') ORDER BY ce.event_date,ce.start_time,ce.id",
                         VetRows.MAPPER, horse, time.today()));
         return result;
     }
@@ -325,6 +337,70 @@ public class VetHorseService {
     private Map<String, Object> horse(String id, boolean lock) {
         access.requireHorse(id, lock);
         return data.db.query("SELECT * FROM horses WHERE id=?", VetRows.MAPPER, id).getFirst();
+    }
+
+    /**
+     * Tự động điều chuyển chuồng theo trạng thái y tế:
+     * Quarantine -> chuồng cách ly, Injured -> chuồng chấn thương, còn lại -> về chuồng gốc.
+     * Trả về null nếu không cần điều chuyển.
+     */
+    private Map<String, Object> relocateForMedicalStatus(String horse, Map<String, Object> old, String status) {
+        String targetType = switch (status) {
+            case "Quarantine" -> "Quarantine";
+            case "Injured" -> "Injury";
+            default -> "Normal";
+        };
+        Object currentBox = old.get("stable_box_id");
+        String currentType = currentBox == null ? "Normal"
+                : data.db.queryForObject("SELECT COALESCE(box_type,'Normal') FROM stable_boxes WHERE id=?",
+                        String.class, currentBox);
+        if (targetType.equals(currentType))
+            return null;
+        String horseName = String.valueOf(old.get("horse_name"));
+        String targetBox;
+        if (!"Normal".equals(targetType)) {
+            targetBox = freeBox(targetType, null);
+            if (targetBox == null)
+                throw new VetException(409, "NO_MEDICAL_STABLE_AVAILABLE", "Quarantine".equals(targetType)
+                        ? "Hết chuồng cách ly trống. Cần giải phóng hoặc bổ sung chuồng cách ly trước."
+                        : "Hết chuồng điều trị chấn thương trống. Cần giải phóng hoặc bổ sung chuồng trước.");
+            // Chỉ ghi nhớ chuồng gốc khi rời chuồng thường (chuyển cách ly <-> chấn thương giữ nguyên chuồng gốc).
+            Object home = "Normal".equals(currentType) ? currentBox : old.get("home_stable_box_id");
+            data.db.update("UPDATE horses SET stable_box_id=?,home_stable_box_id=? WHERE id=?", targetBox, home, horse);
+        } else {
+            Object home = old.get("home_stable_box_id");
+            targetBox = freeBox("Normal", home == null ? null : home.toString());
+            data.db.update("UPDATE horses SET stable_box_id=?,home_stable_box_id=NULL WHERE id=?", targetBox, horse);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("from_box_code", currentBox == null ? null
+                : data.db.queryForObject("SELECT box_code FROM stable_boxes WHERE id=?", String.class, currentBox));
+        result.put("to_box_code", targetBox == null ? null
+                : data.db.queryForObject("SELECT box_code FROM stable_boxes WHERE id=?", String.class, targetBox));
+        result.put("box_type", targetType);
+        String message = "Ngựa " + horseName + " được chuyển "
+                + (result.get("from_box_code") == null ? "" : "từ chuồng " + result.get("from_box_code") + " ")
+                + (targetBox == null ? "ra khỏi khu y tế (chưa có chuồng thường trống, cần Club Manager xếp chuồng)"
+                        : "sang chuồng " + result.get("to_box_code"))
+                + " do trạng thái " + status + ".";
+        result.put("message", message);
+        for (long recipient : activeRecipients("CLUB_MANAGER"))
+            notifications.schedule(recipient, "Horses", horse, message, time.now());
+        notifyTrainingStaff(horse, message);
+        return result;
+    }
+
+    /** Tìm chuồng còn chỗ theo loại; ưu tiên chuồng {@code preferred} nếu còn trống. Khóa hàng để tránh tranh chấp. */
+    private String freeBox(String type, String preferred) {
+        String sql = "SELECT s.id FROM stable_boxes s WHERE s.status='Available' AND COALESCE(s.box_type,'Normal')=? "
+                + "AND s.capacity > (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) ";
+        if (preferred != null) {
+            var hit = data.db.queryForList(sql + "AND s.id=? FOR UPDATE", String.class, type, preferred);
+            if (!hit.isEmpty())
+                return hit.getFirst();
+        }
+        var rows = data.db.queryForList(sql + "ORDER BY s.box_code LIMIT 1 FOR UPDATE", String.class, type);
+        return rows.isEmpty() ? null : rows.getFirst();
     }
 
     private boolean hasUnresolvedInjury(String horse) {

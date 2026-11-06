@@ -332,7 +332,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String, Object> reassign(String email, String ip, String id, JsonNode body) {
-        access.requireRole(email, "VETERINARIAN");
+        long actor = access.requireRole(email, "VETERINARIAN");
         var schedule = lockedSchedule(id);
         var fields = VetInput.parse(body, "assigned_doctor_id:long");
         Long newDoctorId = fields.get("assigned_doctor_id") == null ? null : ((Number) fields.get("assigned_doctor_id")).longValue();
@@ -343,8 +343,8 @@ public class CareScheduleService {
                 "UPDATE periodic_care_schedules SET assigned_doctor_id=?, updated_at=? WHERE id=?",
                 newDoctorId, time.now(), id
         );
-        audit.log(email, ip, "REASSIGN_CARE_SCHEDULE", "Reassigned care schedule " + id + " to doctor " + newDoctorId);
-        return data.row("periodic_care_schedules", id, false);
+        audit.record(actor, ip, "REASSIGN_CARE_SCHEDULE:" + id);
+        return response(id);
     }
 
     private void requireNoConflicts(String horse, long doctor, LocalDate date, LocalTime start, LocalTime end, String exclude) {

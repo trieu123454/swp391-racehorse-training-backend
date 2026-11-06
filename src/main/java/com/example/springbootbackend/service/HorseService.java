@@ -277,6 +277,12 @@ public class HorseService {
                 request.stableBoxId().toString(), id.toString());
         if (!"Available".equals(box.getStatus()) || box.getCapacity() == null || occupied >= box.getCapacity())
             throw new ResponseStatusException(CONFLICT, "Chuồng đã đầy hoặc không khả dụng");
+        // Chuồng cách ly / chấn thương chỉ do bác sĩ thú y điều chuyển qua cập nhật trạng thái sức khỏe.
+        boolean alreadyInThisBox = request.stableBoxId().toString().equals(horse.getStableBoxId());
+        String boxType = db.queryForObject("SELECT COALESCE(box_type,'Normal') FROM stable_boxes WHERE id=?",
+                String.class, request.stableBoxId().toString());
+        if (!alreadyInThisBox && !"Normal".equals(boxType))
+            throw new ResponseStatusException(BAD_REQUEST, "Chuồng cách ly/chấn thương chỉ được điều chuyển bởi bác sĩ thú y");
         String microchip = optionalIdentifier(request.microchipNumber());
         String passport = optionalIdentifier(request.passportNumber());
         validateIdentityAvailable(microchip, passport, id.toString(), id.toString());
@@ -371,7 +377,7 @@ public class HorseService {
 
     public List<Map<String, Object>> stables() {
         return db.queryForList(
-                "SELECT s.*, (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) AS occupied FROM stable_boxes s WHERE s.status='Available' AND s.capacity > (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) ORDER BY s.box_code");
+                "SELECT s.*, (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) AS occupied FROM stable_boxes s WHERE s.status='Available' AND COALESCE(s.box_type,'Normal')='Normal' AND s.capacity > (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) ORDER BY s.box_code");
     }
 
     public Map<String, Object> owners(String search, int page, int size) {

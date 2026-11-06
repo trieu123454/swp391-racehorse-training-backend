@@ -386,7 +386,7 @@ public class ClubManagerService {
         var health = db.queryForList("SELECT current_status,count(*) AS total FROM horses WHERE deleted_at IS NULL GROUP BY current_status ORDER BY current_status");
         var team = db.queryForList("SELECT r.role_name,count(*) AS total FROM users u JOIN roles r ON r.role_id=u.role_id "
                 + "WHERE u.status='APPROVED' AND u.deleted_at IS NULL "
-                + "AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM','CLUB_MANAGER') "
+                + "AND r.role_name IN ('HEAD_TRAINER','HEAD_VETERINARIAN','VETERINARIAN','GROOM','CLUB_MANAGER') "
                 + "GROUP BY r.role_name ORDER BY r.role_name");
         Long scheduledSessions = db.queryForObject("SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
                 + "WHERE h.deleted_at IS NULL AND ce.event_type IN ('Training','TrialRun','Rest') "
@@ -617,7 +617,7 @@ public class ClubManagerService {
     public Map<String, Object> assignIncident(String managerEmail, String ip, UUID incidentId, JsonNode body) {
         long managerId = requireManager(managerEmail); String id = incidentId.toString();
         var fields = VetInput.parse(body, "assigned_role:20", "assignee_id:long", "assignment_note:1000");
-        VetInput.choice(fields, "assigned_role", "HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
+        VetInput.choice(fields, "assigned_role", "HEAD_TRAINER", "HEAD_VETERINARIAN", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
         VetInput.required(fields, "assignment_note");
         String role = fields.get("assigned_role").toString();
         long assigneeId;
