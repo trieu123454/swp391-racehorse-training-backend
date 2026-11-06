@@ -29,7 +29,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN', 'HEAD_VETERINARIAN', 'CLUB_MANAGER')")
 @Tag(name = "Veterinarian - Periodic care")
 @SecurityRequirement(name = "bearerAuth")
 public class CareScheduleController {
@@ -95,5 +95,15 @@ public class CareScheduleController {
     @GetMapping("/veterinarians")
     public List<Map<String, Object>> veterinarians(Principal p) {
         return service.veterinarians(p.getName());
+    }
+
+    @GetMapping("/veterinarian/workload")
+    public List<Map<String, Object>> workload(Principal p) {
+        return service.doctorWorkloads(p.getName());
+    }
+
+    @PatchMapping("/periodic-care-schedules/{id}/reassign")
+    public Map<String, Object> reassign(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
+        return service.reassign(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 }

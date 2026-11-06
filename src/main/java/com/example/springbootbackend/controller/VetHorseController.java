@@ -24,7 +24,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN', 'HEAD_VETERINARIAN')")
 @Tag(name = "Veterinarian - Horse health and training lock")
 @SecurityRequirement(name = "bearerAuth")
 public class VetHorseController {

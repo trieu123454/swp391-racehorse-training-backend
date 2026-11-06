@@ -48,7 +48,7 @@ import com.example.springbootbackend.security.JwtService;
 @Service
 @SuppressWarnings("null")
 public class AuthService {
-    private static final Set<String> REVIEWABLE_ROLES = Set.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
+    private static final Set<String> REVIEWABLE_ROLES = Set.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "CLUB_MANAGER");
 
     private final AppUserRepository userRepository;
     private final RoleRepository roleRepository;

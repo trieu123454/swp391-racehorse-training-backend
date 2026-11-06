@@ -80,7 +80,7 @@ public class HorseService {
         if (Boolean.TRUE.equals(user.get("must_change_password")))
             throw new ResponseStatusException(FORBIDDEN, "Change password before using business APIs");
         if (write ? !actor.role().equals("CLUB_MANAGER")
-                : !Set.of("CLUB_MANAGER", "HEAD_TRAINER", "VETERINARIAN", "GROOM", "HORSE_OWNER")
+                : !Set.of("CLUB_MANAGER", "HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "HORSE_OWNER")
                         .contains(actor.role()))
             throw new ResponseStatusException(FORBIDDEN, "Không có quyền truy cập");
         return actor;

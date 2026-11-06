@@ -129,6 +129,7 @@ public class EmailService {
         }
         return switch (roleName.trim().toUpperCase()) {
             case "HEAD_TRAINER" -> "Huấn luyện viên trưởng (Head Trainer)";
+            case "HEAD_VETERINARIAN" -> "Trưởng ban thú y (Head Veterinarian)";
             case "VETERINARIAN" -> "Bác sĩ thú y (Veterinarian)";
             case "GROOM" -> "Nhân viên chăm sóc ngựa (Groom)";
             case "CLUB_MANAGER" -> "Quản lý Câu lạc bộ (Club Manager)";

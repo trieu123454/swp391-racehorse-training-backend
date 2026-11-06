@@ -18,6 +18,7 @@ public class RoleSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
         seed("HEAD_TRAINER", "Huan luyen vien truong");
+        seed("HEAD_VETERINARIAN", "Truong ban thu y");
         seed("VETERINARIAN", "Bac si thu y");
         seed("GROOM", "Nhan vien cham soc chuong trai");
         seed("HORSE_OWNER", "Chu so huu ngua");

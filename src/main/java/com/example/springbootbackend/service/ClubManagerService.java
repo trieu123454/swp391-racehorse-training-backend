@@ -42,9 +42,9 @@ import static org.springframework.http.HttpStatus.*;
 
 @Service
 public class ClubManagerService {
-    private static final List<String> STAFF_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM");
-    private static final List<String> CREATABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "CLUB_MANAGER");
-    private static final List<String> ASSIGNABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "GROOM", "HORSE_OWNER");
+    private static final List<String> STAFF_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM");
+    private static final List<String> CREATABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "CLUB_MANAGER");
+    private static final List<String> ASSIGNABLE_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "HORSE_OWNER");
 
     private final VetData db;
     private final PasswordEncoder passwordEncoder;
@@ -127,13 +127,13 @@ public class ClubManagerService {
         String normalizedRole = normalizeStaffRole(role);
         String roleClause = normalizedRole == null ? "" : " AND r.role_name=?";
         String countSql = "SELECT count(*) FROM users u JOIN roles r ON r.role_id=u.role_id "
-                + "WHERE u.status='PENDING' AND u.deleted_at IS NULL AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM')"
+                + "WHERE u.status='PENDING' AND u.deleted_at IS NULL AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','HEAD_VETERINARIAN','GROOM')"
                 + roleClause;
         List<Object> countArgs = normalizedRole == null ? List.of() : List.of(normalizedRole);
         long total = db.queryForObject(countSql, Long.class, countArgs.toArray());
         String listSql = "SELECT u.user_id,u.full_name,u.email,u.phone,r.role_name,u.status,u.created_at "
                 + "FROM users u JOIN roles r ON r.role_id=u.role_id "
-                + "WHERE u.status='PENDING' AND u.deleted_at IS NULL AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM')"
+                + "WHERE u.status='PENDING' AND u.deleted_at IS NULL AND r.role_name IN ('HEAD_TRAINER','VETERINARIAN','HEAD_VETERINARIAN','GROOM')"
                 + roleClause + " ORDER BY u.created_at ASC,u.user_id ASC LIMIT ? OFFSET ?";
         var args = new ArrayList<Object>(countArgs);
         args.add(limit);
@@ -220,7 +220,7 @@ public class ClubManagerService {
     public Map<String, Object> incidentAssignees(String managerEmail) {
         requireManager(managerEmail);
         var rows = db.queryForList("SELECT u.user_id AS id,u.full_name,u.email,r.role_name FROM users u "
-                + "JOIN roles r ON r.role_id=u.role_id WHERE r.role_name IN ('HEAD_TRAINER','VETERINARIAN','GROOM') "
+                + "JOIN roles r ON r.role_id=u.role_id WHERE r.role_name IN ('HEAD_TRAINER','VETERINARIAN','HEAD_VETERINARIAN','GROOM') "
                 + "AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL "
                 + "ORDER BY r.role_name,u.full_name,u.user_id");
         return Map.of("data", rows);
@@ -765,7 +765,7 @@ public class ClubManagerService {
     private String normalizeStaffRole(String role) {
         if (!StringUtils.hasText(role)) return null;
         String normalized = role.trim().toUpperCase(Locale.ROOT);
-        if (!STAFF_ROLES.contains(normalized)) throw new ResponseStatusException(BAD_REQUEST, "role chỉ nhận HEAD_TRAINER, VETERINARIAN hoặc GROOM");
+        if (!STAFF_ROLES.contains(normalized)) throw new ResponseStatusException(BAD_REQUEST, "role chỉ nhận HEAD_TRAINER, VETERINARIAN, HEAD_VETERINARIAN hoặc GROOM");
         return normalized;
     }
 
