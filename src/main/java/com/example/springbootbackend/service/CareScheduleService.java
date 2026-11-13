@@ -286,18 +286,36 @@ public class CareScheduleService {
             row.put("context", false);
         }
         if (context) {
-            var unique = horses.stream().distinct().toList();
-            List<Map<String, Object>> extra = List.of();
-            long total = 0;
-            if (!unique.isEmpty()) {
-                String contextWhere = " WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=? AND ce.source_table<>? AND ce.horse_id IN ("
-                        + String.join(",", Collections.nCopies(unique.size(), "?")) + ")";
-                var params = new ArrayList<Object>(List.of(from, to, SOURCE));
-                params.addAll(unique);
-                total = data.db.queryForObject("SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id" + contextWhere, Long.class, params.toArray());
-                params.add(page.limit());
-                extra = data.db.query("SELECT ce.*,h.horse_name FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id" + contextWhere + " ORDER BY ce.event_date,ce.start_time,ce.id LIMIT ?", VetRows.MAPPER, params.toArray());
-                extra.forEach(row -> row.put("context", true));
+            String contextFrom = " FROM calendar_events ce"
+                    + " JOIN horses h ON h.id=ce.horse_id"
+                    + " LEFT JOIN training_schedules ts ON ts.calendar_event_id=ce.id"
+                    + " LEFT JOIN users groom ON groom.user_id=ts.assigned_groom_id"
+                    + " LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id";
+            String contextWhere = " WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?"
+                    + " AND ce.source_table<>? AND ce.event_type IN ('Training','TrialRun','Rest','Race')"
+                    + " AND ce.status<>'Cancelled'";
+            var params = new ArrayList<Object>(List.of(from, to, SOURCE));
+            if (horse != null) {
+                contextWhere += " AND ce.horse_id=?";
+                params.add(horse);
+            }
+            long total = data.db.queryForObject("SELECT count(*)" + contextFrom + contextWhere, Long.class, params.toArray());
+            params.add(Math.max(page.limit(), 200));
+            List<Map<String, Object>> extra = data.db.query(
+                    "SELECT ce.id,ce.id AS event_id,ce.horse_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,"
+                    + "ce.source_table,ce.source_id,h.horse_name,sb.box_code,sb.section,"
+                    + "ts.session_type,ts.track_surface,ts.snapshot_stage_name AS plan_stage_name,"
+                    + "ts.target_distance_meters,ts.target_intensity,groom.full_name AS groom_name"
+                    + contextFrom + contextWhere
+                    + " ORDER BY ce.event_date,ce.start_time,h.horse_name,ce.id LIMIT ?",
+                    VetRows.MAPPER, params.toArray());
+            for (var row : extra) {
+                row.put("context", true);
+                Object hId = row.get("horse_id");
+                Object hName = row.get("horse_name");
+                if (hId != null && hName != null) {
+                    row.put("horse", Map.of("id", hId, "horse_name", hName));
+                }
             }
             result.put("context_events", extra);
             result.put("context_total", total);

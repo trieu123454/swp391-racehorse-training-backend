@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,8 @@ public class HorseStorage {
     private final ObjectMapper json;
     private final VetTime time;
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private record CachedUrl(Map<String, Object> payload, long expiresAtMs) {}
+    private final ConcurrentHashMap<String, CachedUrl> signedUrlCache = new ConcurrentHashMap<>();
 
     @Autowired
     public HorseStorage(
@@ -142,7 +145,17 @@ public class HorseStorage {
 
     public Map<String, Object> signedUrl(String path, String downloadFilename) {
         if (path == null) return Map.of("hasImage", false);
-        if (isCloudinaryPath(path)) return cloudinaryUrl(path, downloadFilename);
+        String cacheKey = path + "|" + Objects.toString(downloadFilename, "");
+        long nowMs = System.currentTimeMillis();
+        CachedUrl cached = signedUrlCache.get(cacheKey);
+        if (cached != null && nowMs < cached.expiresAtMs()) {
+            return cached.payload();
+        }
+        if (isCloudinaryPath(path)) {
+            Map<String, Object> result = cloudinaryUrl(path, downloadFilename);
+            signedUrlCache.put(cacheKey, new CachedUrl(result, nowMs + 240_000L));
+            return result;
+        }
         if (!path.matches("(horses|incidents)/[0-9a-fA-F-]{36}\\.(jpg|png|webp)|horse-documents/[0-9a-fA-F-]{36}\\.(jpg|png|webp|pdf)"))
             throw new ResponseStatusException(BAD_REQUEST, "Đường dẫn tệp không hợp lệ");
         String response = send("/object/sign/" + bucket + "/" + path, "application/json", "{\"expiresIn\":300}".getBytes(StandardCharsets.UTF_8));
@@ -152,7 +165,9 @@ public class HorseStorage {
             if (!signed.startsWith("/object/sign/")) throw new IllegalArgumentException();
             String signedUrl = url + "/storage/v1" + signed;
             if (downloadFilename != null && !downloadFilename.isBlank()) signedUrl += "&download=" + encode(downloadFilename);
-            return Map.of("hasImage", true, "url", signedUrl, "expiresIn", 300);
+            Map<String, Object> result = Map.of("hasImage", true, "url", signedUrl, "expiresIn", 300);
+            signedUrlCache.put(cacheKey, new CachedUrl(result, nowMs + 240_000L));
+            return result;
         } catch (Exception e) { throw new ResponseStatusException(BAD_GATEWAY, "Không lấy được link ảnh"); }
     }
 

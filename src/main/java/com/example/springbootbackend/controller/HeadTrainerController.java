@@ -154,6 +154,11 @@ public class HeadTrainerController {
     @GetMapping("/head-trainer/grooms")
     public Map<String, Object> grooms(Principal user) { return service.grooms(user.getName()); }
 
+    @PostMapping("/head-trainer/reset-clean-data")
+    public Map<String, Object> resetCleanData(Principal user, HttpServletRequest request) {
+        return service.resetAndSeedCleanTrainingData(user.getName(), request.getRemoteAddr());
+    }
+
     @PatchMapping("/training-schedules/{id}/assign-groom")
     public Map<String, Object> assignGroom(Principal user, HttpServletRequest request,
             @PathVariable("id") UUID id, @RequestBody JsonNode body) {

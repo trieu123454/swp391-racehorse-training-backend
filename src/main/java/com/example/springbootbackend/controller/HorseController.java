@@ -36,16 +36,41 @@ public class HorseController {
         Boolean locked = isTrainingLocked != null ? isTrainingLocked : lockedSnake;
         int actualPage = page < 1 ? 0 : page - 1;
         int actualSize = limit == null ? size : limit;
-        return horses.list(horses.actor(principal.getName(), false), search, breed, currentStatus != null ? currentStatus : status, stable, locked, actualPage, actualSize);
+        Map<String, Object> res = horses.list(horses.actor(principal.getName(), false), search, breed, currentStatus != null ? currentStatus : status, stable, locked, actualPage, actualSize);
+        if (res.get("items") instanceof List<?> listItems) {
+            for (Object obj : listItems) {
+                if (obj instanceof Map<?, ?> rawMap) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) rawMap;
+                    attachSignedImageUrl(row);
+                }
+            }
+        }
+        return res;
+    }
+
+    private void attachSignedImageUrl(Map<String, Object> horse) {
+        Object imgObj = horse.get("image_url");
+        if (imgObj instanceof String path && !path.isBlank()) {
+            try {
+                Map<String, Object> signed = storage.signedUrl(path);
+                if (signed.get("url") instanceof String signedUrl && !signedUrl.isBlank()) {
+                    horse.put("image_signed_url", signedUrl);
+                }
+            } catch (Exception ignored) {
+                // Keep non-blocking if storage signing fails for an item
+            }
+        }
     }
 
     @GetMapping("/{id}")
     public Map<String, Object> detail(Principal p, @PathVariable("id") UUID id) {
         HorseService.Actor actor = horses.actor(p.getName(), false);
         Map<String, Object> horse = horses.detail(actor, id);
+        attachSignedImageUrl(horse);
         if (Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
             List<Map<String, Object>> documents = new ArrayList<>();
-            for (Map<String, Object> document : horses.approvedRegistrationDocuments(actor, id)) {
+            for (Map<String, Object> document : horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id)) {
                 Map<String, Object> item = new LinkedHashMap<>(document);
                 String path = Objects.toString(item.remove("object_path"), null);
                 Map<String, Object> signed = storage.signedUrl(path);

@@ -103,13 +103,14 @@ public class HorseRegistrationService {
         request.setId(UUID.randomUUID().toString());
         request.setOwnerId(owner.getId());
         request.setRequestType(submission.requestType());
-        request.setHorseImagePath(storage.uploadRegistrationHorseImage(horseImage, owner.getId()));
+        UploadedRegistrationAssets uploaded = uploadAssetsInParallel(horseImage, owner.getId(), validFiles);
+        request.setHorseImagePath(uploaded.horseImagePath());
         request.setStatus("PENDING");
         request.setRevisionNo(1);
         request.setCreatedAt(time.utcNow());
         requestRepository.saveAndFlush(request);
 
-        saveDocuments(request, validFiles, types);
+        saveUploadedDocuments(request, validFiles, types, uploaded.documentPaths());
         recordHistory(request, "SUBMITTED", owner.getId(), null);
         audit(owner.getId(), "SUBMIT_HORSE_REGISTRATION: " + request.getId(), ip);
         return ownerRequest(request, true);
@@ -134,8 +135,12 @@ public class HorseRegistrationService {
                     request.getId(), null);
 
         applySubmission(request, submission);
-        if (horseImage != null && !horseImage.isEmpty())
-            request.setHorseImagePath(storage.uploadRegistrationHorseImage(horseImage, owner.getId()));
+        UploadedRegistrationAssets uploaded = uploadAssetsInParallel(
+                (horseImage != null && !horseImage.isEmpty()) ? horseImage : null,
+                owner.getId(),
+                validFiles);
+        if (uploaded.horseImagePath() != null)
+            request.setHorseImagePath(uploaded.horseImagePath());
         request.setRevisionNo(request.getRevisionNo() + 1);
         request.setStatus("PENDING");
         request.setReviewNote(null);
@@ -147,7 +152,7 @@ public class HorseRegistrationService {
         request.setTransferConsentNote(null);
         requestRepository.saveAndFlush(request);
 
-        saveDocuments(request, validFiles, types);
+        saveUploadedDocuments(request, validFiles, types, uploaded.documentPaths());
         recordHistory(request, "RESUBMITTED", owner.getId(), null);
         audit(owner.getId(), "RESUBMIT_HORSE_REGISTRATION: " + request.getId(), ip);
         return ownerRequest(request, true);
@@ -156,8 +161,8 @@ public class HorseRegistrationService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> ownerRequests(String email) {
         AppUser owner = requireUser(email, "HORSE_OWNER");
-        return requestRepository.findByOwnerIdOrderByCreatedAtDescIdDesc(owner.getId()).stream()
-                .map(request -> ownerRequest(request, true)).toList();
+        List<HorseRegistrationRequest> requests = requestRepository.findByOwnerIdOrderByCreatedAtDescIdDesc(owner.getId());
+        return attachDocumentsAndHistoryBatch(requests, Map.of(), true);
     }
 
     @Transactional(readOnly = true)
@@ -165,16 +170,7 @@ public class HorseRegistrationService {
         requireUser(email, "CLUB_MANAGER");
         List<HorseRegistrationRequest> requests = requestRepository.findByStatusOrderByCreatedAtAscIdAsc("PENDING");
         Map<Long, AppUser> owners = usersById(requests.stream().map(HorseRegistrationRequest::getOwnerId).toList());
-        return requests.stream().map(request -> {
-            Map<String, Object> row = requestMap(request);
-            AppUser owner = owners.get(request.getOwnerId());
-            if (owner != null) {
-                row.put("owner_name", owner.getFullName());
-                row.put("owner_email", owner.getEmail());
-                row.put("owner_phone", owner.getPhone());
-            }
-            return attachDocumentsAndHistory(row, request);
-        }).toList();
+        return attachDocumentsAndHistoryBatch(requests, owners, true);
     }
 
     @Transactional
@@ -463,10 +459,28 @@ public class HorseRegistrationService {
         return types;
     }
 
-    private void saveDocuments(HorseRegistrationRequest request, List<MultipartFile> files, List<String> types) {
+    private record UploadedRegistrationAssets(String horseImagePath, List<String> documentPaths) {}
+
+    private UploadedRegistrationAssets uploadAssetsInParallel(MultipartFile horseImage, long ownerId, List<MultipartFile> files) {
+        boolean hasHorseImage = horseImage != null && !horseImage.isEmpty();
+        List<java.util.function.Supplier<String>> tasks = new ArrayList<>();
+        if (hasHorseImage) {
+            tasks.add(() -> storage.uploadRegistrationHorseImage(horseImage, ownerId));
+        }
+        for (MultipartFile file : files) {
+            tasks.add(() -> storage.uploadRegistrationDocument(file));
+        }
+        if (tasks.isEmpty()) {
+            return new UploadedRegistrationAssets(null, List.of());
+        }
+        List<String> uploaded = parallelMap(tasks, java.util.function.Supplier::get, "Không tải lên được tệp hồ sơ ngựa");
+        String imagePath = hasHorseImage ? uploaded.getFirst() : null;
+        List<String> docPaths = hasHorseImage ? uploaded.subList(1, uploaded.size()) : uploaded;
+        return new UploadedRegistrationAssets(imagePath, docPaths);
+    }
+
+    private void saveUploadedDocuments(HorseRegistrationRequest request, List<MultipartFile> files, List<String> types, List<String> paths) {
         if (files.isEmpty()) return;
-        List<String> paths = parallelMap(files, storage::uploadRegistrationDocument,
-                "Không tải lên được giấy tờ xác minh");
         for (int index = 0; index < files.size(); index++) {
             MultipartFile file = files.get(index);
             HorseRegistrationDocument document = new HorseRegistrationDocument();
@@ -484,63 +498,76 @@ public class HorseRegistrationService {
         documentRepository.flush();
     }
 
-    private Map<String, Object> ownerRequest(HorseRegistrationRequest request, boolean includeHistory) {
-        return attachDocumentsAndHistory(requestMap(request), request, includeHistory);
-    }
-
-    private Map<String, Object> attachDocumentsAndHistory(Map<String, Object> row,
-            HorseRegistrationRequest request) {
-        return attachDocumentsAndHistory(row, request, true);
-    }
-
-    private Map<String, Object> attachDocumentsAndHistory(Map<String, Object> row,
-            HorseRegistrationRequest request, boolean includeHistory) {
-        List<Map<String, Object>> documents = documentRepository
-                .findByRequestIdOrderByUploadedAtAscIdAsc(request.getId()).stream().map(document -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("id", document.getId());
-                    item.put("name", document.getOriginalFilename());
-                    item.put("content_type", document.getContentType());
-                    item.put("file_size", document.getFileSize());
-                    item.put("document_type", document.getDocumentType());
-                    item.put("revision_no", document.getRevisionNo());
-                    item.put("object_path", document.getObjectPath());
-                    return item;
-                }).toList();
-        List<Map<String, Object>> paths = new ArrayList<>();
-        String imagePath = request.getHorseImagePath();
-        if (imagePath != null) {
-            Map<String, Object> image = new LinkedHashMap<>();
-            image.put("object_path", imagePath);
-            image.put("kind", "image");
-            paths.add(image);
+    private List<Map<String, Object>> attachDocumentsAndHistoryBatch(
+            List<HorseRegistrationRequest> requests,
+            Map<Long, AppUser> owners,
+            boolean includeHistory) {
+        if (requests.isEmpty()) return List.of();
+        List<String> requestIds = requests.stream().map(HorseRegistrationRequest::getId).toList();
+        Map<String, List<HorseRegistrationDocument>> docsByRequest = new HashMap<>();
+        for (HorseRegistrationDocument doc : documentRepository.findByRequestIdInOrderByUploadedAtAscIdAsc(requestIds)) {
+            docsByRequest.computeIfAbsent(doc.getRequestId(), k -> new ArrayList<>()).add(doc);
         }
-        documents.forEach(paths::add);
-        List<String> urls = parallelMap(paths,
-                item -> Objects.toString(storage.signedUrl(Objects.toString(item.get("object_path"), "")).get("url"), null),
-                "Không tạo được liên kết giấy tờ xác minh");
-        int urlIndex = 0;
-        row.put("horse_image_url", imagePath == null ? null : urls.get(urlIndex++));
-        for (Map<String, Object> document : documents) {
-            document.remove("object_path");
-            document.put("url", urls.get(urlIndex++));
-        }
-        row.put("documents", documents);
+        Map<String, List<HorseRegistrationRequestHistory>> historyByRequest = new HashMap<>();
         if (includeHistory) {
-            row.put("history", historyRepository.findByRequestIdOrderByCreatedAtAscIdAsc(request.getId())
-                    .stream().map(history -> {
-                        Map<String, Object> item = new LinkedHashMap<>();
-                        item.put("id", history.getId());
-                        item.put("revision_no", history.getRevisionNo());
-                        item.put("action", history.getAction());
-                        item.put("actor_id", history.getActorId());
-                        item.put("note", history.getNote());
-                        item.put("snapshot_json", history.getSnapshotJson());
-                        item.put("created_at", history.getCreatedAt());
-                        return item;
-                    }).toList());
+            for (HorseRegistrationRequestHistory h : historyRepository.findByRequestIdInOrderByCreatedAtAscIdAsc(requestIds)) {
+                historyByRequest.computeIfAbsent(h.getRequestId(), k -> new ArrayList<>()).add(h);
+            }
         }
-        return row;
+        List<String> allPaths = new ArrayList<>();
+        for (HorseRegistrationRequest req : requests) {
+            if (req.getHorseImagePath() != null) allPaths.add(req.getHorseImagePath());
+            for (HorseRegistrationDocument doc : docsByRequest.getOrDefault(req.getId(), List.of())) {
+                allPaths.add(doc.getObjectPath());
+            }
+        }
+        List<String> signedUrls = parallelMap(allPaths,
+                path -> Objects.toString(storage.signedUrl(Objects.toString(path, "")).get("url"), null),
+                "Không tạo được liên kết giấy tờ xác minh");
+        int cursor = 0;
+        List<Map<String, Object>> result = new ArrayList<>(requests.size());
+        for (HorseRegistrationRequest req : requests) {
+            Map<String, Object> row = requestMap(req);
+            AppUser owner = owners.get(req.getOwnerId());
+            if (owner != null) {
+                row.put("owner_name", owner.getFullName());
+                row.put("owner_email", owner.getEmail());
+                row.put("owner_phone", owner.getPhone());
+            }
+            row.put("horse_image_url", req.getHorseImagePath() == null ? null : signedUrls.get(cursor++));
+            List<Map<String, Object>> docMaps = new ArrayList<>();
+            for (HorseRegistrationDocument doc : docsByRequest.getOrDefault(req.getId(), List.of())) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", doc.getId());
+                item.put("name", doc.getOriginalFilename());
+                item.put("content_type", doc.getContentType());
+                item.put("file_size", doc.getFileSize());
+                item.put("document_type", doc.getDocumentType());
+                item.put("revision_no", doc.getRevisionNo());
+                item.put("url", signedUrls.get(cursor++));
+                docMaps.add(item);
+            }
+            row.put("documents", docMaps);
+            if (includeHistory) {
+                row.put("history", historyByRequest.getOrDefault(req.getId(), List.of()).stream().map(history -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", history.getId());
+                    item.put("revision_no", history.getRevisionNo());
+                    item.put("action", history.getAction());
+                    item.put("actor_id", history.getActorId());
+                    item.put("note", history.getNote());
+                    item.put("snapshot_json", history.getSnapshotJson());
+                    item.put("created_at", history.getCreatedAt());
+                    return item;
+                }).toList());
+            }
+            result.add(row);
+        }
+        return result;
+    }
+
+    private Map<String, Object> ownerRequest(HorseRegistrationRequest request, boolean includeHistory) {
+        return attachDocumentsAndHistoryBatch(List.of(request), Map.of(), includeHistory).getFirst();
     }
 
     private Map<String, Object> requestMap(HorseRegistrationRequest request) {

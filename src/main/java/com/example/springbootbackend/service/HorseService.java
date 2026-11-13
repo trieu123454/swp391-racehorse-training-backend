@@ -147,8 +147,8 @@ public class HorseService {
         long total = db.queryForObject("SELECT count(*) FROM horses h" + where, Long.class, args.toArray());
         args.add(size);
         args.add((long) page * size);
-        String latestMetricWeight = "(SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id "
-                + "AND m.body_weight_kg IS NOT NULL ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) AS latest_metric_weight_kg";
+        String latestMetricWeight = "CASE WHEN h.current_weight_kg IS NOT NULL THEN h.current_weight_kg ELSE (SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id "
+                + "AND m.body_weight_kg IS NOT NULL ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) END AS latest_metric_weight_kg";
         String columns = actor.role().equals("GROOM")
                 ? "h.id,h.horse_name,h.image_url,h.stable_box_id,h.current_status,h.height_cm,h.current_weight_kg,s.box_code,s.section,"
                         + latestMetricWeight
@@ -171,8 +171,8 @@ public class HorseService {
                 throw new ResponseStatusException(FORBIDDEN, "Horse is not assigned to this Groom");
             var assigned = db.queryForList(
                     "SELECT h.id,h.horse_name,h.image_url,h.stable_box_id,h.current_status,h.height_cm,h.current_weight_kg,"
-                            + "s.box_code,s.section,(SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id AND m.body_weight_kg IS NOT NULL "
-                            + "ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) AS latest_metric_weight_kg FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id "
+                            + "s.box_code,s.section,CASE WHEN h.current_weight_kg IS NOT NULL THEN h.current_weight_kg ELSE (SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id AND m.body_weight_kg IS NOT NULL "
+                            + "ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) END AS latest_metric_weight_kg FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id "
                             + "WHERE h.id=? AND h.deleted_at IS NULL",
                     id.toString());
             if (assigned.isEmpty())
@@ -180,8 +180,8 @@ public class HorseService {
             return groomHorseSummary(assigned.getFirst());
         }
         var rows = db.queryForList("SELECT h.*,s.box_code,s.section,u.full_name AS owner_name,"
-                + "(SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id AND m.body_weight_kg IS NOT NULL "
-                + "ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) AS latest_metric_weight_kg "
+                + "CASE WHEN h.current_weight_kg IS NOT NULL THEN h.current_weight_kg ELSE (SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id AND m.body_weight_kg IS NOT NULL "
+                + "ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) END AS latest_metric_weight_kg "
                 + "FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users u ON u.user_id=h.owner_id "
                 + "WHERE h.id=? AND h.deleted_at IS NULL", id.toString());
         if (rows.isEmpty())
@@ -203,6 +203,12 @@ public class HorseService {
         if (!Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role()))
             throw new ResponseStatusException(FORBIDDEN, "Không có quyền xem giấy tờ sở hữu");
         detail(actor, horseId);
+        return approvedRegistrationDocumentsForVerifiedHorse(actor, horseId);
+    }
+
+    public List<Map<String, Object>> approvedRegistrationDocumentsForVerifiedHorse(Actor actor, UUID horseId) {
+        if (!Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role()))
+            throw new ResponseStatusException(FORBIDDEN, "Không có quyền xem giấy tờ sở hữu");
         String ownerFilter = actor.role().equals("HORSE_OWNER") ? " AND r.owner_id=?" : "";
         List<Object> args = new ArrayList<>();
         args.add(horseId.toString());
