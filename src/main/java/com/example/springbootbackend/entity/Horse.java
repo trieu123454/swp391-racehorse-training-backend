@@ -78,6 +78,9 @@ public class Horse {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "ownership_history_json", columnDefinition = "TEXT")
+    private String ownershipHistoryJson;
+
     public String getId() {
         return id;
     }
@@ -236,5 +239,13 @@ public class Horse {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getOwnershipHistoryJson() {
+        return ownershipHistoryJson;
+    }
+
+    public void setOwnershipHistoryJson(String ownershipHistoryJson) {
+        this.ownershipHistoryJson = ownershipHistoryJson;
     }
 }

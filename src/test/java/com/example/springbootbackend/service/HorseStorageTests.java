@@ -39,7 +39,9 @@ class HorseStorageTests {
             assertThat(path).matches("horses/[a-f0-9-]{36}\\.png");
             assertThat(seenKey.get()).isEqualTo("test-secret");
             assertThat(seenBody.get()).isEqualTo(png);
-            verify(db).update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)", path, 7L, uploadedAt);
+            verify(db).update(
+                    eq("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)"),
+                    anyString(), eq(7L), eq("UPLOAD_HORSE_IMAGE:" + path), eq("127.0.0.1"), eq(uploadedAt));
             assertThat(storage.signedUrl(path).get("url").toString()).contains("/storage/v1/object/sign/").doesNotContain("test-secret");
             assertThat(new String(seenBody.get(), StandardCharsets.UTF_8)).contains("300");
         } finally {

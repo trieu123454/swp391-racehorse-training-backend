@@ -23,7 +23,7 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(30);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(34);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery(
@@ -32,18 +32,16 @@ class DatabaseMigrationTests {
                 while (rs.next())
                     tables.add(rs.getString(1));
                 assertThat(tables).containsExactlyInAnyOrder(
-                        "roles", "users", "refresh_tokens", "role_change_requests", "stable_boxes", "horses",
-                        "training_plans", "training_plan_horses", "training_plan_logs", "training_schedules",
+                        "roles", "users", "refresh_tokens", "stable_boxes", "horses",
+                        "training_plans", "training_plan_horses", "training_schedules",
                         "training_metrics_logs",
-                        "races", "horse_race_entries", "training_videos", "health_exams", "health_exam_logs",
+                        "races", "horse_race_entries", "health_exams",
                         "medical_records", "prescriptions", "diet_records", "injury_markers", "periodic_care_schedules",
                         "notifications", "daily_task_logs", "stable_incidents", "inventory_items", "inventory_lots",
                         "inventory_transactions", "supply_requests",
-                        "financial_reports", "audit_logs", "horse_image_uploads", "calendar_events",
-                        "race_simulations", "race_simulation_horses", "race_simulation_metrics",
-                        "training_simulation_readings",
-                        "horse_registration_requests", "horse_registration_documents", "horse_ownership_history",
-                        "horse_registration_request_history", "horse_identity_lock", "password_reset_codes",
+                        "financial_reports", "audit_logs", "calendar_events",
+                        "race_simulations", "race_simulation_horses",
+                        "horse_registration_requests", "horse_registration_documents",
                         "flyway_schema_history");
             }
             try (var rs = s.executeQuery(
@@ -82,11 +80,11 @@ class DatabaseMigrationTests {
         String url = databaseUrl();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             ScriptUtils.executeSqlScript(c, new ClassPathResource("db/migration/V1__create_authentication_schema.sql"));
-            s.executeUpdate("insert into roles(role_id,role_name) values (1,'HORSE_OWNER'),(2,'GROOM')");
+            s.executeUpdate("insert into roles(role_name) values ('HORSE_OWNER'),('GROOM')");
             s.executeUpdate(
                     "insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(29);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(33);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();

@@ -30,7 +30,6 @@ import com.example.springbootbackend.dto.response.UserResponse;
 import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
 import com.example.springbootbackend.entity.Notification;
-import com.example.springbootbackend.entity.PasswordResetCode;
 import com.example.springbootbackend.entity.RefreshToken;
 import com.example.springbootbackend.entity.Role;
 import com.example.springbootbackend.entity.UserStatus;
@@ -39,7 +38,6 @@ import com.example.springbootbackend.exception.AuthException;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
 import com.example.springbootbackend.repository.NotificationRepository;
-import com.example.springbootbackend.repository.PasswordResetCodeRepository;
 import com.example.springbootbackend.repository.RefreshTokenRepository;
 import com.example.springbootbackend.repository.RoleRepository;
 import com.example.springbootbackend.security.JwtProperties;
@@ -60,7 +58,6 @@ public class AuthService {
     private final GoogleTokenService googleTokenService;
     private final AuditLogRepository auditLogRepository;
     private final NotificationRepository notificationRepository;
-    private final PasswordResetCodeRepository passwordResetCodeRepository;
     private final EmailService emailService;
     private final SmsService smsService;
 
@@ -75,7 +72,6 @@ public class AuthService {
             GoogleTokenService googleTokenService,
             AuditLogRepository auditLogRepository,
             NotificationRepository notificationRepository,
-            PasswordResetCodeRepository passwordResetCodeRepository,
             EmailService emailService,
             SmsService smsService
     ) {
@@ -89,7 +85,6 @@ public class AuthService {
         this.googleTokenService = googleTokenService;
         this.auditLogRepository = auditLogRepository;
         this.notificationRepository = notificationRepository;
-        this.passwordResetCodeRepository = passwordResetCodeRepository;
         this.emailService = emailService;
         this.smsService = smsService;
     }
@@ -173,29 +168,15 @@ public class AuthService {
             throw new AuthException("Tài khoản đang chờ duyệt hoặc chưa được kích hoạt");
         }
 
-        // Vô hiệu hóa các mã cũ chưa dùng của email này
-        List<PasswordResetCode> oldCodes = passwordResetCodeRepository.findByEmailIgnoreCaseAndUsedFalse(request.email());
-        for (PasswordResetCode old : oldCodes) {
-            old.setUsed(true);
-        }
-        for (PasswordResetCode old : oldCodes) {
-            passwordResetCodeRepository.save(old);
-        }
-
-        // Sinh mã OTP 6 chữ số ngẫu nhiên
+        // Sinh mã OTP 6 chữ số ngẫu nhiên và lưu trực tiếp trên user
         String code = String.format("%06d", new java.security.SecureRandom().nextInt(1_000_000));
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plusMinutes(15);
 
-        PasswordResetCode resetCode = new PasswordResetCode(
-                UUID.randomUUID().toString(),
-                user.getId(),
-                user.getEmail(),
-                code,
-                expiresAt,
-                now
-        );
-        passwordResetCodeRepository.save(resetCode);
+        user.setResetCode(code);
+        user.setResetCodeExpiresAt(expiresAt);
+        user.setResetCodeUsed(false);
+        userRepository.save(user);
 
         // Gửi email và SMS
         emailService.sendPasswordResetCode(user.getEmail(), user.getFullName(), code);
@@ -218,16 +199,16 @@ public class AuthService {
         }
 
         LocalDateTime now = LocalDateTime.now();
-        PasswordResetCode resetCode = passwordResetCodeRepository
-                .findTopByEmailIgnoreCaseAndCodeAndUsedFalseOrderByCreatedAtDesc(request.email(), request.code())
+        AppUser user = userRepository.findByEmailIgnoreCase(request.email())
                 .orElseThrow(() -> new AuthException("Mã xác nhận không chính xác hoặc đã được sử dụng"));
 
-        if (resetCode.getExpiresAt().isBefore(now)) {
-            throw new AuthException("Mã xác nhận đã hết hạn (chỉ có hiệu lực trong 15 phút). Vui lòng yêu cầu mã mới.");
+        if (user.isResetCodeUsed() || user.getResetCode() == null || !user.getResetCode().equals(request.code())) {
+            throw new AuthException("Mã xác nhận không chính xác hoặc đã được sử dụng");
         }
 
-        AppUser user = userRepository.findByEmailIgnoreCase(request.email())
-                .orElseThrow(() -> new AuthException("Không tìm thấy tài khoản tương ứng"));
+        if (user.getResetCodeExpiresAt() == null || user.getResetCodeExpiresAt().isBefore(now)) {
+            throw new AuthException("Mã xác nhận đã hết hạn (chỉ có hiệu lực trong 15 phút). Vui lòng yêu cầu mã mới.");
+        }
 
         if (user.getDeletedAt() != null || user.getStatus() != UserStatus.APPROVED) {
             throw new AuthException("Tài khoản không ở trạng thái hoạt động");
@@ -237,14 +218,11 @@ public class AuthService {
             throw new AuthException("Mật khẩu mới không được trùng với mật khẩu hiện tại");
         }
 
-        // Cập nhật mật khẩu mới và bỏ cờ bắt buộc đổi mật khẩu
+        // Cập nhật mật khẩu mới, bỏ cờ bắt buộc đổi mật khẩu và đánh dấu mã đã sử dụng
         user.changePassword(passwordEncoder.encode(request.newPassword()));
         user.setMustChangePassword(false);
+        user.setResetCodeUsed(true);
         userRepository.save(user);
-
-        // Đánh dấu mã đã sử dụng
-        resetCode.setUsed(true);
-        passwordResetCodeRepository.save(resetCode);
 
         // Thu hồi tất cả refresh token cũ để bảo vệ tài khoản
         refreshTokenRepository.revokeActiveTokensByUserId(user.getId());

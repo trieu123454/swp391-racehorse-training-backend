@@ -263,10 +263,9 @@ public class ClubManagerService {
         if (!List.of("Pending", "Approved", "Rejected").contains(requestedStatus)) {
             throw new ResponseStatusException(BAD_REQUEST, "status không hợp lệ");
         }
-        return db.queryForList("SELECT r.id,r.user_id,u.full_name,u.email,cr.role_name AS current_role,rr.role_name AS requested_role,r.reason,r.status,r.created_at,r.reviewed_by,r.reviewed_at "
-                + "FROM role_change_requests r JOIN users u ON u.user_id=r.user_id "
-                + "LEFT JOIN roles cr ON cr.role_id=r.current_role_id JOIN roles rr ON rr.role_id=r.requested_role_id "
-                + "WHERE r.status=? ORDER BY r.created_at ASC", requestedStatus);
+        return db.queryForList("SELECT u.role_change_request_id AS id,u.user_id,u.full_name,u.email,cr.role_name AS current_role,rr.role_name AS requested_role,u.role_change_reason AS reason,u.role_change_status AS status,u.role_change_created_at AS created_at,u.role_change_reviewed_by AS reviewed_by,u.role_change_reviewed_at AS reviewed_at "
+                + "FROM users u LEFT JOIN roles cr ON cr.role_id=u.role_id JOIN roles rr ON rr.role_id=u.requested_role_id "
+                + "WHERE u.role_change_status=? ORDER BY u.role_change_created_at ASC", requestedStatus);
     }
 
     @Transactional
@@ -276,7 +275,7 @@ public class ClubManagerService {
         if (!normalizedAction.equals("approve") && !normalizedAction.equals("reject")) {
             throw new ResponseStatusException(BAD_REQUEST, "action phải là approve hoặc reject");
         }
-        List<Map<String, Object>> rows = db.queryForList("SELECT id,user_id,requested_role_id,status FROM role_change_requests WHERE id=? FOR UPDATE", requestId);
+        List<Map<String, Object>> rows = db.queryForList("SELECT role_change_request_id AS id,user_id,requested_role_id,role_change_status AS status FROM users WHERE role_change_request_id=? FOR UPDATE", requestId);
         if (rows.isEmpty()) throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy yêu cầu đổi vai trò");
         Map<String, Object> request = rows.getFirst();
         if (!"Pending".equals(request.get("status"))) {
@@ -285,17 +284,17 @@ public class ClubManagerService {
         LocalDateTime now = time.utcNow();
         Long userId = ((Number) request.get("user_id")).longValue();
         if (normalizedAction.equals("approve")) {
-            db.queryForList("SELECT user_id FROM users WHERE user_id=? FOR UPDATE", userId);
             String currentRole = db.queryForObject("SELECT r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.user_id=?", String.class, userId);
             String requestedRole = db.queryForObject("SELECT role_name FROM roles WHERE role_id=?", String.class, request.get("requested_role_id"));
             if ("GROOM".equals(currentRole) && !"GROOM".equals(requestedRole))
                 assertNoUpcomingGroomAssignments(userId);
-            db.update("UPDATE users SET role_id=?, updated_at=? WHERE user_id=?", request.get("requested_role_id"), now, userId);
-            db.update("UPDATE role_change_requests SET status='Approved',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
+            db.update("UPDATE users SET role_id=?, role_change_status='Approved', role_change_reviewed_by=?, role_change_reviewed_at=?, updated_at=? WHERE user_id=?",
+                    request.get("requested_role_id"), managerId, now, now, userId);
             revokeActiveRefreshTokens(userId);
             notifyUser(userId, "Yêu cầu đổi vai trò của bạn đã được phê duyệt.");
         } else {
-            db.update("UPDATE role_change_requests SET status='Rejected',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
+            db.update("UPDATE users SET role_change_status='Rejected', role_change_reviewed_by=?, role_change_reviewed_at=?, updated_at=? WHERE user_id=?",
+                    managerId, now, now, userId);
             notifyUser(userId, "Yêu cầu đổi vai trò của bạn đã bị từ chối.");
         }
         audit(managerId, (normalizedAction.equals("approve") ? "APPROVE_ROLE_CHANGE: " : "REJECT_ROLE_CHANGE: ") + requestId);

@@ -22,13 +22,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.springbootbackend.dto.request.ApiPage;
-import com.example.springbootbackend.entity.TrainingPlanLog;
-import com.example.springbootbackend.entity.TrainingVideo;
 import com.example.springbootbackend.exception.VetException;
-import com.example.springbootbackend.repository.TrainingPlanLogRepository;
 import com.example.springbootbackend.repository.TrainingPlanRepository;
 import com.example.springbootbackend.repository.TrainingScheduleRepository;
-import com.example.springbootbackend.repository.TrainingVideoRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,9 +48,7 @@ public class HeadTrainerService {
     private final ObjectMapper json;
     private final TrainingSimulationRecorder simulationRecorder;
     private final TrainingPlanRepository trainingPlanRepository;
-    private final TrainingPlanLogRepository trainingPlanLogRepository;
     private final TrainingScheduleRepository trainingScheduleRepository;
-    private final TrainingVideoRepository trainingVideoRepository;
     private final int injuryAlertHeartRate;
     private final BigDecimal injuryAlertStamina;
     private final BigDecimal injuryAlertSpeed;
@@ -70,9 +64,7 @@ public class HeadTrainerService {
             ObjectMapper json,
             TrainingSimulationRecorder simulationRecorder,
             TrainingPlanRepository trainingPlanRepository,
-            TrainingPlanLogRepository trainingPlanLogRepository,
             TrainingScheduleRepository trainingScheduleRepository,
-            TrainingVideoRepository trainingVideoRepository,
             @Value("${app.head-trainer.injury-alert-heart-rate:220}") int injuryAlertHeartRate,
             @Value("${app.head-trainer.injury-alert-stamina:3}") BigDecimal injuryAlertStamina,
             @Value("${app.head-trainer.injury-alert-speed-kmh:60}") BigDecimal injuryAlertSpeed) {
@@ -86,9 +78,7 @@ public class HeadTrainerService {
         this.json = json;
         this.simulationRecorder = simulationRecorder;
         this.trainingPlanRepository = trainingPlanRepository;
-        this.trainingPlanLogRepository = trainingPlanLogRepository;
         this.trainingScheduleRepository = trainingScheduleRepository;
-        this.trainingVideoRepository = trainingVideoRepository;
         this.injuryAlertHeartRate = injuryAlertHeartRate;
         this.injuryAlertStamina = injuryAlertStamina;
         this.injuryAlertSpeed = injuryAlertSpeed;
@@ -431,16 +421,7 @@ public class HeadTrainerService {
         db.update("UPDATE training_plans SET " + String.join(",", assignments.keySet().stream()
                 .map(key -> key + "=?").toList()) + " WHERE id=?", args.toArray());
 
-        TrainingPlanLog log = new TrainingPlanLog();
-        log.setId(UUID.randomUUID().toString());
-        log.setTrainingPlanId(id);
-        log.setChangedBy(actor);
-        log.setOldDataJson(writeJson(oldChanged));
-        log.setNewDataJson(writeJson(newChanged));
-        log.setChangedAt(time.utcNow());
-        trainingPlanLogRepository.saveAndFlush(log);
-
-        audit.record(actor, ip, "UPDATE_TRAINING_PLAN:" + id);
+        audit.record(actor, ip, "UPDATE_TRAINING_PLAN:" + id + ":" + writeJson(newChanged));
         return planDetail(id);
     }
 
@@ -728,16 +709,12 @@ public class HeadTrainerService {
         LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
 
         // 1. Delete all existing training simulations, schedules, training calendar events, and training plans cleanly
-        db.update("DELETE FROM training_simulation_readings WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
-        db.update("DELETE FROM race_simulation_metrics WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
         db.update("DELETE FROM race_simulation_horses WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
         db.update("DELETE FROM race_simulations WHERE training_schedule_id IS NOT NULL");
         db.update("DELETE FROM training_metrics_logs WHERE is_simulated = TRUE AND training_schedule_id IS NOT NULL");
         db.update("UPDATE training_metrics_logs SET training_schedule_id = NULL WHERE training_schedule_id IS NOT NULL");
-        db.update("DELETE FROM training_videos WHERE training_schedule_id IS NOT NULL");
         int deletedSchedules = db.update("DELETE FROM training_schedules");
         db.update("DELETE FROM calendar_events WHERE lower(source_table)='training_schedules' OR event_type IN ('Training','TrialRun','Rest')");
-        db.update("DELETE FROM training_plan_logs");
         db.update("DELETE FROM training_plan_horses");
         int deletedPlans = db.update("DELETE FROM training_plans");
 
@@ -1195,21 +1172,16 @@ public class HeadTrainerService {
                 + "WHERE ts.id=? AND h.deleted_at IS NULL", VetRows.MAPPER, schedule);
         if (sessions.isEmpty()) throw new VetException(404, "SCHEDULE_NOT_FOUND", "Khong tim thay buoi tap");
         String id = UUID.randomUUID().toString();
-        TrainingVideo video = new TrainingVideo();
-        video.setId(id);
-        video.setHorseId(sessions.getFirst().get("horse_id").toString());
-        video.setTrainingScheduleId(schedule);
-        video.setVideoUrl(videoUrl);
-        video.setDescription(fields.get("description") != null ? fields.get("description").toString() : null);
-        video.setUploadedBy(actor);
-        video.setUploadedAt(time.utcNow());
-        trainingVideoRepository.saveAndFlush(video);
+        String description = fields.get("description") != null ? fields.get("description").toString() : null;
+        LocalDateTime uploadedAt = time.utcNow();
+        db.update("UPDATE training_schedules SET video_id=?, video_url=?, video_description=?, video_uploaded_by=?, video_uploaded_at=? WHERE id=?",
+                id, videoUrl, description, actor, uploadedAt, schedule);
 
         audit.record(actor, ip, "ADD_TRAINING_VIDEO:" + id);
         if (sessions.getFirst().get("owner_id") instanceof Number ownerId)
             notifications.schedule(ownerId.longValue(), "Training_Videos", id,
                     "A new training video is available for " + sessions.getFirst().get("horse_name") + ".", time.now());
-        return db.query("SELECT id,horse_id,training_schedule_id,video_url,description,uploaded_by,uploaded_at FROM training_videos WHERE id=?", VetRows.MAPPER, id).getFirst();
+        return db.query("SELECT video_id AS id,horse_id,id AS training_schedule_id,video_url,video_description AS description,video_uploaded_by AS uploaded_by,video_uploaded_at AS uploaded_at FROM training_schedules WHERE id=?", VetRows.MAPPER, schedule).getFirst();
     }
 
     private List<Map<String, Object>> metricsForKnownHorse(String horse, LocalDate from, LocalDate to,

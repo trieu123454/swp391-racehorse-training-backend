@@ -120,7 +120,8 @@ public class HorseStorage {
             String path = isCloudinaryProvider() ? cloudinaryPrefix + "/" + fileId + extension : folder + "/" + fileId + extension;
             if (isCloudinaryProvider()) uploadCloudinary(folder + "/" + fileId, "image", privateIncident ? "authenticated" : "upload", extension, type, bytes);
             else send("/object/" + bucket + "/" + path, type, bytes);
-            db.update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)", path, actor, time.utcNow());
+            db.update("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)",
+                    UUID.randomUUID().toString(), actor, "UPLOAD_HORSE_IMAGE:" + path, "127.0.0.1", time.utcNow());
             return Map.of("imagePath", path);
         } catch (IOException e) { throw new ResponseStatusException(BAD_REQUEST, "Không đọc được ảnh"); }
     }

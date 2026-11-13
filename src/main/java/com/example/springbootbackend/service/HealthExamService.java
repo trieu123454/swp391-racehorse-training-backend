@@ -16,10 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.springbootbackend.dto.request.ApiPage;
-import com.example.springbootbackend.entity.HealthExamLog;
 import com.example.springbootbackend.entity.Horse;
 import com.example.springbootbackend.exception.VetException;
-import com.example.springbootbackend.repository.HealthExamLogRepository;
 import com.example.springbootbackend.repository.HorseRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -34,7 +32,6 @@ public class HealthExamService {
 
     private final VetData db;
     private final HorseRepository horseRepository;
-    private final HealthExamLogRepository healthExamLogRepository;
     private final VetAccess access;
     private final VetAudit audit;
     private final VetTime time;
@@ -45,7 +42,6 @@ public class HealthExamService {
     public HealthExamService(
             VetData db,
             HorseRepository horseRepository,
-            HealthExamLogRepository healthExamLogRepository,
             VetAccess access,
             VetAudit audit,
             VetTime time,
@@ -55,7 +51,6 @@ public class HealthExamService {
     ) {
         this.db = db;
         this.horseRepository = horseRepository;
-        this.healthExamLogRepository = healthExamLogRepository;
         this.access = access;
         this.audit = audit;
         this.time = time;
@@ -109,7 +104,7 @@ public class HealthExamService {
         args.add(page.offset());
         var rows = db.query("SELECT e.id,e.exam_date,e.doctor_id,u.full_name AS doctor_name,"
                 + "e.temperature_c,e.heart_rate,e.respiratory_rate,"
-                + "EXISTS(SELECT 1 FROM health_exam_logs l WHERE l.health_exam_id=e.id) AS has_edits "
+                + "CASE WHEN e.edit_history_json IS NOT NULL THEN TRUE ELSE FALSE END AS has_edits "
                 + "FROM health_exams e LEFT JOIN users u ON u.user_id=e.doctor_id" + where
                 + " ORDER BY e.exam_date DESC,e.id DESC LIMIT ? OFFSET ?", VetRows.MAPPER, args.toArray());
         rows.forEach(this::addDoctor);
@@ -123,12 +118,16 @@ public class HealthExamService {
 
     public Map<String, Object> logs(String email, UUID id, ApiPage page) {
         access.requireRole(email, "VETERINARIAN");
-        existing(id.toString(), false);
-        var rows = db.query("SELECT l.*,u.full_name AS editor_name FROM health_exam_logs l "
-                        + "LEFT JOIN users u ON u.user_id=l.edited_by WHERE l.health_exam_id=? "
-                        + "ORDER BY l.edited_at DESC,l.id DESC LIMIT ? OFFSET ?", VetRows.MAPPER,
-                id.toString(), page.limit(), page.offset());
-        for (var row : rows) {
+        var exam = existing(id.toString(), false);
+        List<Map<String, Object>> history = decodeHistory((String) exam.get("edit_history_json"));
+        long total = history.size();
+        List<Map<String, Object>> reversed = new ArrayList<>(history);
+        Collections.reverse(reversed);
+        int fromIdx = (int) Math.min(reversed.size(), page.offset());
+        int toIdx = Math.min(reversed.size(), fromIdx + page.limit());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map<String, Object> entry : reversed.subList(fromIdx, toIdx)) {
+            Map<String, Object> row = new LinkedHashMap<>(entry);
             Map<String, Object> oldData = decode((String) row.remove("old_data_json"));
             Map<String, Object> newData = decode((String) row.remove("new_data_json"));
             List<Map<String, Object>> changes = new ArrayList<>();
@@ -139,10 +138,14 @@ public class HealthExamService {
                 change.put("new_value", newData.get(field));
                 changes.add(change);
             }
-            row.put("edited_by", VetRows.person(row.get("edited_by"), row.remove("editor_name")));
+            Object editedBy = row.get("edited_by");
+            String editorName = editedBy instanceof Number num
+                    ? db.queryForList("SELECT full_name FROM users WHERE user_id=?", String.class, num.longValue()).stream().findFirst().orElse(null)
+                    : null;
+            row.put("edited_by", VetRows.person(editedBy, editorName));
             row.put("changes", changes);
+            rows.add(row);
         }
-        Long total = db.queryForObject("SELECT count(*) FROM health_exam_logs WHERE health_exam_id=?", Long.class, id.toString());
         return Map.of("data", rows, "total", total, "page", page.page(), "limit", page.limit());
     }
 
@@ -152,6 +155,9 @@ public class HealthExamService {
         var old = existing(id.toString(), true);
         var patch = ExamInput.parse(body);
         Map<String, Object> merged = new LinkedHashMap<>(old);
+        merged.remove("edit_history_json");
+        merged.remove("last_edited_by");
+        merged.remove("last_edited_at");
         merged.putAll(patch);
         ExamInput.validate(merged, time.now());
         Map<String, Object> before = new LinkedHashMap<>();
@@ -163,18 +169,25 @@ public class HealthExamService {
             }
         });
         if (after.isEmpty()) return Map.of("changed", false);
-        List<Object> args = new ArrayList<>(after.values().stream().map(VetRows::sqlValue).toList());
+        LocalDateTime editedAt = time.utcNow();
+        List<Map<String, Object>> history = new ArrayList<>(decodeHistory((String) old.get("edit_history_json")));
+        Map<String, Object> logEntry = new LinkedHashMap<>();
+        logEntry.put("id", UUID.randomUUID().toString());
+        logEntry.put("health_exam_id", id.toString());
+        logEntry.put("edited_by", editor);
+        logEntry.put("old_data_json", encode(before));
+        logEntry.put("new_data_json", encode(after));
+        logEntry.put("edited_at", editedAt.toString());
+        history.add(logEntry);
+
+        Map<String, Object> updates = new LinkedHashMap<>(after);
+        updates.put("edit_history_json", encodeHistory(history));
+        updates.put("last_edited_by", editor);
+        updates.put("last_edited_at", editedAt);
+        List<Object> args = new ArrayList<>(updates.values().stream().map(VetRows::sqlValue).toList());
         args.add(id.toString());
-        db.update("UPDATE health_exams SET " + String.join(",", after.keySet().stream().map(field -> field + "=?").toList())
+        db.update("UPDATE health_exams SET " + String.join(",", updates.keySet().stream().map(field -> field + "=?").toList())
                 + " WHERE id=?", args.toArray());
-        HealthExamLog log = new HealthExamLog();
-        log.setId(UUID.randomUUID().toString());
-        log.setHealthExamId(id.toString());
-        log.setEditedBy(editor);
-        log.setOldDataJson(encode(before));
-        log.setNewDataJson(encode(after));
-        log.setEditedAt(time.utcNow());
-        healthExamLogRepository.saveAndFlush(log);
         audit.record(editor, ip, "UPDATE_HEALTH_EXAM:" + id);
         var exam = detailRecord(id.toString());
         return Map.of("changed", true, "exam", exam, "alerts", exam.get("alerts"));
@@ -193,11 +206,14 @@ public class HealthExamService {
         existing(id, false);
         var exam = db.query(SELECT + "WHERE e.id=?", VetRows.MAPPER, id).getFirst();
         addDoctor(exam);
-        var latest = db.query("SELECT l.edited_at,l.edited_by,u.full_name AS editor_name FROM health_exam_logs l "
-                + "LEFT JOIN users u ON u.user_id=l.edited_by WHERE l.health_exam_id=? "
-                + "ORDER BY l.edited_at DESC,l.id DESC LIMIT 1", VetRows.MAPPER, id);
-        exam.put("last_edited_at", latest.isEmpty() ? null : latest.getFirst().get("edited_at"));
-        exam.put("last_edited_by", latest.isEmpty() ? null : VetRows.person(latest.getFirst().get("edited_by"), latest.getFirst().get("editor_name")));
+        exam.remove("edit_history_json");
+        Object lastEditedBy = exam.remove("last_edited_by");
+        Object lastEditedAt = exam.remove("last_edited_at");
+        String editorName = lastEditedBy instanceof Number num
+                ? db.queryForList("SELECT full_name FROM users WHERE user_id=?", String.class, num.longValue()).stream().findFirst().orElse(null)
+                : null;
+        exam.put("last_edited_at", lastEditedAt);
+        exam.put("last_edited_by", lastEditedBy == null ? null : VetRows.person(lastEditedBy, editorName));
         var warnings = alerts.evaluate(exam);
         exam.put("alerts", warnings);
         exam.put("suggest_medical_record", !warnings.isEmpty());
@@ -228,6 +244,24 @@ public class HealthExamService {
             });
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot read exam history", e);
+        }
+    }
+
+    private String encodeHistory(List<Map<String, Object>> value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Cannot serialize exam history list", e);
+        }
+    }
+
+    private List<Map<String, Object>> decodeHistory(String value) {
+        if (value == null || value.isBlank()) return List.of();
+        try {
+            return json.readValue(value, new TypeReference<List<Map<String, Object>>>() {
+            });
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Cannot read exam history list", e);
         }
     }
 }

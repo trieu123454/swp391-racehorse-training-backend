@@ -90,13 +90,17 @@ public class HorseOwnerRepository {
 
     public List<Map<String, Object>> findTrainingVideos(String horseId) {
         return db.queryForList("""
-                SELECT v.id,v.training_schedule_id,v.video_url,v.description,v.uploaded_at,
-                       u.full_name AS uploaded_by_name,ts.session_type
-                FROM training_videos v
-                LEFT JOIN users u ON u.user_id=v.uploaded_by
-                LEFT JOIN training_schedules ts ON ts.id=v.training_schedule_id
-                WHERE v.horse_id=?
-                ORDER BY v.uploaded_at DESC,v.id DESC
+                SELECT COALESCE(ts.video_id, ts.id) AS id,
+                       ts.id AS training_schedule_id,
+                       ts.video_url,
+                       ts.video_description AS description,
+                       ts.video_uploaded_at AS uploaded_at,
+                       u.full_name AS uploaded_by_name,
+                       ts.session_type
+                FROM training_schedules ts
+                LEFT JOIN users u ON u.user_id=ts.video_uploaded_by
+                WHERE ts.horse_id=? AND ts.video_url IS NOT NULL
+                ORDER BY ts.video_uploaded_at DESC,ts.id DESC
                 """, horseId);
     }
 

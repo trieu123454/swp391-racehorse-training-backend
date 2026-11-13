@@ -5,16 +5,14 @@ import com.example.springbootbackend.dto.request.HorseUpdateRequest;
 import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
 import com.example.springbootbackend.entity.Horse;
-import com.example.springbootbackend.entity.HorseOwnershipHistory;
 import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
-import com.example.springbootbackend.repository.HorseImageUploadRepository;
-import com.example.springbootbackend.repository.HorseIdentityLockRepository;
 import com.example.springbootbackend.repository.HorseRegistrationRequestRepository;
 import com.example.springbootbackend.repository.HorseRepository;
-import com.example.springbootbackend.repository.HorseOwnershipHistoryRepository;
 import com.example.springbootbackend.repository.StableBoxRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;
 import java.time.LocalDate;
@@ -30,39 +28,33 @@ public class HorseService {
     private final VetData db;
     private final VetTime time;
     private final int groomAssignmentWindowDays;
-    private final HorseOwnershipHistoryRepository ownershipHistoryRepository;
     private final AuditLogRepository auditLogRepository;
     private final HorseRepository horseRepository;
     private final HorseRegistrationRequestRepository registrationRequestRepository;
     private final AppUserRepository userRepository;
     private final StableBoxRepository stableBoxRepository;
-    private final HorseImageUploadRepository horseImageUploadRepository;
-    private final HorseIdentityLockRepository identityLockRepository;
     private final TrainingSimulationRecorder simulationRecorder;
+    private final ObjectMapper objectMapper;
 
     public HorseService(VetData db, VetTime time,
             @Value("${app.groom.assignment-window-days:14}") int groomAssignmentWindowDays,
-            HorseOwnershipHistoryRepository ownershipHistoryRepository,
             AuditLogRepository auditLogRepository,
             HorseRepository horseRepository,
             HorseRegistrationRequestRepository registrationRequestRepository,
             AppUserRepository userRepository,
             StableBoxRepository stableBoxRepository,
-            HorseImageUploadRepository horseImageUploadRepository,
-            HorseIdentityLockRepository identityLockRepository,
-            TrainingSimulationRecorder simulationRecorder) {
+            TrainingSimulationRecorder simulationRecorder,
+            ObjectMapper objectMapper) {
         this.db = db;
         this.time = time;
         this.groomAssignmentWindowDays = Math.max(0, groomAssignmentWindowDays);
-        this.ownershipHistoryRepository = ownershipHistoryRepository;
         this.auditLogRepository = auditLogRepository;
         this.horseRepository = horseRepository;
         this.registrationRequestRepository = registrationRequestRepository;
         this.userRepository = userRepository;
         this.stableBoxRepository = stableBoxRepository;
-        this.horseImageUploadRepository = horseImageUploadRepository;
-        this.identityLockRepository = identityLockRepository;
         this.simulationRecorder = simulationRecorder;
+        this.objectMapper = objectMapper;
     }
 
     public record Actor(long id, String role) {
@@ -296,7 +288,10 @@ public class HorseService {
         if (path == null)
             path = horse.getImageUrl();
         if (path != null && !Objects.equals(path, horse.getImageUrl())) {
-            if (!horseImageUploadRepository.existsByObjectPathAndUploadedBy(path, actor.id()))
+            Long uploaded = db.queryForObject(
+                    "SELECT count(*) FROM audit_logs WHERE user_id=? AND action_performed=?",
+                    Long.class, actor.id(), "UPLOAD_HORSE_IMAGE:" + path);
+            if (uploaded == null || uploaded == 0)
                 throw new ResponseStatusException(BAD_REQUEST,
                         "Ảnh phải được upload qua hệ thống bởi tài khoản hiện tại");
         }
@@ -319,34 +314,56 @@ public class HorseService {
     public List<Map<String, Object>> ownershipHistory(Actor actor, UUID horseId) {
         if (!actor.role().equals("CLUB_MANAGER"))
             throw new ResponseStatusException(FORBIDDEN, "Chỉ Club Manager được xem lịch sử sở hữu");
-        if (db.queryForObject("SELECT count(*) FROM horses WHERE id=? AND deleted_at IS NULL", Long.class,
-                horseId.toString()) == 0)
-            throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa");
-        return db.queryForList(
-                "SELECT h.id,h.previous_owner_id,previous.full_name AS previous_owner_name,h.new_owner_id,current.full_name AS new_owner_name,h.changed_by,manager.full_name AS changed_by_name,h.change_reason,h.changed_at "
-                        + "FROM horse_ownership_history h LEFT JOIN users previous ON previous.user_id=h.previous_owner_id "
-                        + "LEFT JOIN users current ON current.user_id=h.new_owner_id LEFT JOIN users manager ON manager.user_id=h.changed_by "
-                        + "WHERE h.horse_id=? ORDER BY h.changed_at DESC",
-                horseId.toString());
+        Horse horse = horseRepository.findByIdAndDeletedAtIsNull(horseId.toString())
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
+        String json = horse.getOwnershipHistoryJson();
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            List<Map<String, Object>> entries = objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (int i = entries.size() - 1; i >= 0; i--) {
+                Map<String, Object> item = new LinkedHashMap<>(entries.get(i));
+                item.put("previous_owner_name", findUserName(item.get("previous_owner_id")));
+                item.put("new_owner_name", findUserName(item.get("new_owner_id")));
+                item.put("changed_by_name", findUserName(item.get("changed_by")));
+                result.add(item);
+            }
+            return result;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private String findUserName(Object userIdObj) {
+        if (!(userIdObj instanceof Number num)) return null;
+        return userRepository.findById(num.longValue()).map(AppUser::getFullName).orElse(null);
     }
 
     private void ownershipChange(String horseId, Long previousOwner, Long newOwner, long changedBy, String reason) {
-        HorseOwnershipHistory history = new HorseOwnershipHistory();
-        history.setId(UUID.randomUUID().toString());
-        history.setHorseId(horseId);
-        history.setPreviousOwnerId(previousOwner);
-        history.setNewOwnerId(newOwner);
-        history.setChangedBy(changedBy);
-        history.setChangeReason(reason);
-        history.setChangedAt(time.utcNow());
-        ownershipHistoryRepository.saveAndFlush(history);
+        Horse horse = horseRepository.findById(horseId).orElse(null);
+        if (horse == null) return;
+        try {
+            List<Map<String, Object>> entries = new ArrayList<>();
+            if (horse.getOwnershipHistoryJson() != null && !horse.getOwnershipHistoryJson().isBlank()) {
+                entries.addAll(objectMapper.readValue(horse.getOwnershipHistoryJson(), new TypeReference<List<Map<String, Object>>>() {}));
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("id", UUID.randomUUID().toString());
+            entry.put("horse_id", horseId);
+            entry.put("previous_owner_id", previousOwner);
+            entry.put("new_owner_id", newOwner);
+            entry.put("changed_by", changedBy);
+            entry.put("change_reason", reason);
+            entry.put("changed_at", time.utcNow().toString());
+            entries.add(entry);
+            horse.setOwnershipHistoryJson(objectMapper.writeValueAsString(entries));
+            horseRepository.saveAndFlush(horse);
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot serialize ownership history", e);
+        }
     }
 
     private void validateIdentityAvailable(String microchip, String passport, String horseId, String requestId) {
-        if (microchip != null || passport != null) {
-            identityLockRepository.findByIdForUpdate(1)
-                    .orElseThrow(() -> new IllegalStateException("Horse identity lock is missing"));
-        }
         List<String> activeRequests = List.of("PENDING", "NEEDS_INFORMATION", "AWAITING_OWNER_CONSENT");
         if (microchip != null && (horseRepository.existsByMicrochipNumberIgnoreCaseAndIdNot(microchip, horseId)
                 || registrationRequestRepository.existsOtherActiveMicrochip("REGISTER", activeRequests,

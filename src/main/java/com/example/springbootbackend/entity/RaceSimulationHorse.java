@@ -1,6 +1,10 @@
 package com.example.springbootbackend.entity;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.EmbeddedId;
@@ -37,6 +41,34 @@ public class RaceSimulationHorse {
 
     @Column(name = "body_weight_kg", precision = 6, scale = 2)
     private BigDecimal bodyWeightKg;
+
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "metric_id", length = 36)
+    private String metricId;
+
+    @Column(name = "finish_time_seconds", precision = 10, scale = 2)
+    private BigDecimal finishTimeSeconds;
+
+    @Column(name = "avg_speed_kmh", precision = 5, scale = 2)
+    private BigDecimal avgSpeedKmh;
+
+    @Column(name = "max_heart_rate")
+    private Integer maxHeartRate;
+
+    @Column(name = "max_bp_systolic")
+    private Integer maxBpSystolic;
+
+    @Column(name = "max_bp_diastolic")
+    private Integer maxBpDiastolic;
+
+    @Column(name = "rank")
+    private Integer rank;
+
+    @Column(name = "has_injury_alert", nullable = false)
+    private boolean hasInjuryAlert = false;
+
+    @Column(name = "metric_created_at")
+    private LocalDateTime metricCreatedAt;
 
     public RaceSimulationHorseId getId() {
         return id;
@@ -108,5 +140,77 @@ public class RaceSimulationHorse {
 
     public void setBodyWeightKg(BigDecimal bodyWeightKg) {
         this.bodyWeightKg = bodyWeightKg;
+    }
+
+    public String getMetricId() {
+        return metricId;
+    }
+
+    public void setMetricId(String metricId) {
+        this.metricId = metricId;
+    }
+
+    public BigDecimal getFinishTimeSeconds() {
+        return finishTimeSeconds;
+    }
+
+    public void setFinishTimeSeconds(BigDecimal finishTimeSeconds) {
+        this.finishTimeSeconds = finishTimeSeconds;
+    }
+
+    public BigDecimal getAvgSpeedKmh() {
+        return avgSpeedKmh;
+    }
+
+    public void setAvgSpeedKmh(BigDecimal avgSpeedKmh) {
+        this.avgSpeedKmh = avgSpeedKmh;
+    }
+
+    public Integer getMaxHeartRate() {
+        return maxHeartRate;
+    }
+
+    public void setMaxHeartRate(Integer maxHeartRate) {
+        this.maxHeartRate = maxHeartRate;
+    }
+
+    public Integer getMaxBpSystolic() {
+        return maxBpSystolic;
+    }
+
+    public void setMaxBpSystolic(Integer maxBpSystolic) {
+        this.maxBpSystolic = maxBpSystolic;
+    }
+
+    public Integer getMaxBpDiastolic() {
+        return maxBpDiastolic;
+    }
+
+    public void setMaxBpDiastolic(Integer maxBpDiastolic) {
+        this.maxBpDiastolic = maxBpDiastolic;
+    }
+
+    public Integer getRank() {
+        return rank;
+    }
+
+    public void setRank(Integer rank) {
+        this.rank = rank;
+    }
+
+    public boolean isHasInjuryAlert() {
+        return hasInjuryAlert;
+    }
+
+    public void setHasInjuryAlert(boolean hasInjuryAlert) {
+        this.hasInjuryAlert = hasInjuryAlert;
+    }
+
+    public LocalDateTime getMetricCreatedAt() {
+        return metricCreatedAt;
+    }
+
+    public void setMetricCreatedAt(LocalDateTime metricCreatedAt) {
+        this.metricCreatedAt = metricCreatedAt;
     }
 }

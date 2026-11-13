@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.example.springbootbackend.entity.StableIncident;
 import com.example.springbootbackend.exception.VetException;
-import com.example.springbootbackend.repository.HorseImageUploadRepository;
 import com.example.springbootbackend.repository.StableIncidentRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -28,7 +27,6 @@ public class GroomWorkspaceService {
     private final VetTime time;
     private final NotificationService notifications;
     private final GroomHorseService horses;
-    private final HorseImageUploadRepository imageUploadRepository;
     private final StableIncidentRepository incidentRepository;
 
     public GroomWorkspaceService(
@@ -38,7 +36,6 @@ public class GroomWorkspaceService {
             VetTime time,
             NotificationService notifications,
             GroomHorseService horses,
-            HorseImageUploadRepository imageUploadRepository,
             StableIncidentRepository incidentRepository) {
         this.db = db;
         this.access = access;
@@ -46,7 +43,6 @@ public class GroomWorkspaceService {
         this.time = time;
         this.notifications = notifications;
         this.horses = horses;
-        this.imageUploadRepository = imageUploadRepository;
         this.incidentRepository = incidentRepository;
     }
 
@@ -248,7 +244,10 @@ public class GroomWorkspaceService {
         if (image instanceof String path) {
             if (!path.startsWith("incidents/"))
                 throw VetException.invalid("image_url", "Upload an incident photo through the Groom workspace first");
-            if (!imageUploadRepository.existsByObjectPathAndUploadedBy(path, groomId))
+            Long uploaded = db.queryForObject(
+                    "SELECT count(*) FROM audit_logs WHERE user_id=? AND action_performed=?",
+                    Long.class, groomId, "UPLOAD_HORSE_IMAGE:" + path);
+            if (uploaded == null || uploaded == 0)
                 throw VetException.invalid("image_url", "Upload this incident photo from your Groom account first");
         }
         String id = UUID.randomUUID().toString();

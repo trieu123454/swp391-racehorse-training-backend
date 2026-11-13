@@ -128,7 +128,7 @@ class VeterinarianTests {
     @Test void examPatchLogsOnlyTypedChangesAndOtherVetMayEdit() throws Exception {
         String id = createExam();
         call(body(patch("/api/health-exams/" + id), Map.of("temperature_c", 38.90, "doctor_id", 999))).andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(false));
-        assertThat(db.queryForObject("SELECT count(*) FROM health_exam_logs", Long.class)).isZero();
+        assertThat(db.queryForObject("SELECT edit_history_json FROM health_exams WHERE id=?", String.class, id)).isNull();
         mvc.perform(body(patch("/api/health-exams/" + id), Map.of("temperature_c", 38.4)).with(user(OTHER).roles("VETERINARIAN")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.exam.doctor.id").value(uid(VET)));
         call(get("/api/health-exams/" + id + "/logs")).andExpect(status().isOk()).andExpect(jsonPath("$.data[0].edited_by.id").value(uid(OTHER)))
@@ -140,11 +140,11 @@ class VeterinarianTests {
 
     @Test void historyFailureRollsBackExamAndAudit() throws Exception {
         String id = createExam(); long audits = db.queryForObject("SELECT count(*) FROM audit_logs", Long.class);
-        db.execute("ALTER TABLE health_exam_logs ADD CONSTRAINT test_reject_editor CHECK(edited_by<0)");
+        db.execute("ALTER TABLE health_exams ADD CONSTRAINT test_reject_editor CHECK(last_edited_by<0)");
         try {
             assertThatThrownBy(() -> call(body(patch("/api/health-exams/" + id), Map.of("temperature_c", 38.4))))
                     .hasRootCauseInstanceOf(java.sql.SQLException.class);
-        } finally { db.execute("ALTER TABLE health_exam_logs DROP CONSTRAINT test_reject_editor"); }
+        } finally { db.execute("ALTER TABLE health_exams DROP CONSTRAINT test_reject_editor"); }
         assertThat(db.queryForObject("SELECT temperature_c FROM health_exams WHERE id=?", Double.class, id)).isEqualTo(38.9);
         assertThat(db.queryForObject("SELECT count(*) FROM audit_logs", Long.class)).isEqualTo(audits);
     }

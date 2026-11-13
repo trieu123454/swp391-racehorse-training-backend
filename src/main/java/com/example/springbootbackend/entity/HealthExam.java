@@ -84,6 +84,15 @@ public class HealthExam {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    @Column(name = "edit_history_json", columnDefinition = "TEXT")
+    private String editHistoryJson;
+
+    @Column(name = "last_edited_by")
+    private Long lastEditedBy;
+
+    @Column(name = "last_edited_at")
+    private LocalDateTime lastEditedAt;
+
     public String getId() {
         return id;
     }
@@ -258,5 +267,29 @@ public class HealthExam {
 
     public void setNotes(String notes) {
         this.notes = notes;
+    }
+
+    public String getEditHistoryJson() {
+        return editHistoryJson;
+    }
+
+    public void setEditHistoryJson(String editHistoryJson) {
+        this.editHistoryJson = editHistoryJson;
+    }
+
+    public Long getLastEditedBy() {
+        return lastEditedBy;
+    }
+
+    public void setLastEditedBy(Long lastEditedBy) {
+        this.lastEditedBy = lastEditedBy;
+    }
+
+    public LocalDateTime getLastEditedAt() {
+        return lastEditedAt;
+    }
+
+    public void setLastEditedAt(LocalDateTime lastEditedAt) {
+        this.lastEditedAt = lastEditedAt;
     }
 }

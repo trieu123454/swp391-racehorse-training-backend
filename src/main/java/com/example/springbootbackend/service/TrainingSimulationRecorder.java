@@ -6,6 +6,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -14,13 +16,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.example.springbootbackend.entity.RaceSimulationMetric;
 import com.example.springbootbackend.entity.TrainingMetricsLog;
-import com.example.springbootbackend.entity.TrainingSimulationReading;
-import com.example.springbootbackend.entity.TrainingSimulationReadingId;
-import com.example.springbootbackend.repository.RaceSimulationMetricRepository;
 import com.example.springbootbackend.repository.TrainingMetricsLogRepository;
-import com.example.springbootbackend.repository.TrainingSimulationReadingRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Sampling and summaries, called atomically by cancellation and medical locks. */
 @Service
@@ -30,25 +29,22 @@ public class TrainingSimulationRecorder {
     private final VetTime time;
     private final NotificationService notifications;
     private final SimulationAlertPolicy alertPolicy;
-    private final TrainingSimulationReadingRepository readingRepository;
-    private final RaceSimulationMetricRepository metricRepository;
     private final TrainingMetricsLogRepository metricsLogRepository;
+    private final ObjectMapper objectMapper;
 
     public TrainingSimulationRecorder(
             VetData db,
             VetTime time,
             NotificationService notifications,
             SimulationAlertPolicy alertPolicy,
-            TrainingSimulationReadingRepository readingRepository,
-            RaceSimulationMetricRepository metricRepository,
-            TrainingMetricsLogRepository metricsLogRepository) {
+            TrainingMetricsLogRepository metricsLogRepository,
+            ObjectMapper objectMapper) {
         this.db = db;
         this.time = time;
         this.notifications = notifications;
         this.alertPolicy = alertPolicy;
-        this.readingRepository = readingRepository;
-        this.metricRepository = metricRepository;
         this.metricsLogRepository = metricsLogRepository;
+        this.objectMapper = objectMapper;
     }
 
     public void interruptSchedule(String scheduleId, String reason) {
@@ -87,12 +83,24 @@ public class TrainingSimulationRecorder {
         var horse = horses.getFirst();
         int duration = ((Number) session.get("duration_seconds")).intValue();
         int cadence = RaceSimulationFormula.cadence(duration);
-        var previousRows = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds DESC LIMIT 1", VetRows.MAPPER, id);
-        Map<String, Object> previous = previousRows.isEmpty() ? null : previousRows.getFirst();
+        List<Map<String, Object>> readings = new ArrayList<>(parseReadings(session.get("readings_json")));
+        Map<String, Object> previous = readings.isEmpty() ? null : readings.getLast();
         int next = previous == null ? 0 : ((Number) previous.get("elapsed_seconds")).intValue() + cadence;
-        for (int second = next; second <= elapsed; second += cadence) previous = save(session, horse, previous, second);
-        if (terminal && (previous == null || number(previous, "elapsed_seconds") < elapsed)) save(session, horse, previous, elapsed);
-        var readings = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds", VetRows.MAPPER, id);
+        boolean changed = false;
+        for (int second = next; second <= elapsed; second += cadence) {
+            previous = buildReading(session, horse, previous, second);
+            readings.add(previous);
+            changed = true;
+        }
+        if (terminal && (previous == null || number(previous, "elapsed_seconds") < elapsed)) {
+            readings.add(buildReading(session, horse, previous, elapsed));
+            changed = true;
+        }
+        if (changed) {
+            String json = serializeReadings(readings);
+            db.update("UPDATE race_simulations SET readings_json=? WHERE id=?", json, id);
+            session.put("readings_json", json);
+        }
         boolean completed = "Completed".equals(session.get("status"));
         Integer recoveryHeartRate = terminal && completed && !readings.isEmpty()
                 ? alertPolicy.estimateRecoveryHeartRate((int) number(horse, "base_resting_heart_rate"), maximum(readings, "heart_rate"), "Fatigue".equals(session.get("scenario")))
@@ -102,8 +110,7 @@ public class TrainingSimulationRecorder {
         return readings;
     }
 
-    private Map<String, Object> save(Map<String, Object> session, Map<String, Object> horse, Map<String, Object> previous, int second) {
-        String id = session.get("id").toString();
+    private Map<String, Object> buildReading(Map<String, Object> session, Map<String, Object> horse, Map<String, Object> previous, int second) {
         double p = second / number(session, "duration_seconds");
         int seed = ((Number) horse.get("seed")).intValue();
         double speed = RaceSimulationFormula.speedAt(number(horse, "base_max_speed_kmh"), p, seed, version(session));
@@ -115,20 +122,38 @@ public class TrainingSimulationRecorder {
         int diastolic = (int) Math.round(number(horse, "base_bp_diastolic") + (RaceSimulationFormula.noise(seed, p, 0x1b873593) - 0.5) * 6);
         BigDecimal savedSpeed = decimal(speed, 3);
 
-        TrainingSimulationReading reading = new TrainingSimulationReading();
-        reading.setId(new TrainingSimulationReadingId(id, second));
-        reading.setSpeedKmh(savedSpeed);
-        reading.setHeartRate(hr);
-        reading.setBpSystolic(systolic);
-        reading.setBpDiastolic(diastolic);
-        readingRepository.saveAndFlush(reading);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("elapsed_seconds", second);
+        row.put("speed_kmh", savedSpeed);
+        row.put("heart_rate", hr);
+        row.put("bp_systolic", systolic);
+        row.put("bp_diastolic", diastolic);
+        return row;
+    }
 
-        return Map.of("elapsed_seconds", second, "speed_kmh", savedSpeed, "heart_rate", hr, "bp_systolic", systolic, "bp_diastolic", diastolic);
+    public List<Map<String, Object>> parseReadings(Object raw) {
+        if (raw == null) return List.of();
+        String json = raw.toString().trim();
+        if (json.isEmpty()) return List.of();
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private String serializeReadings(List<Map<String, Object>> readings) {
+        try {
+            return objectMapper.writeValueAsString(readings);
+        } catch (Exception e) {
+            return "[]";
+        }
     }
 
     public void summarize(Map<String, Object> session, int elapsed) {
         String id = session.get("id").toString();
-        if (metricRepository.existsBySimulationId(id)) return;
+        var existing = db.query("SELECT finish_time_seconds FROM race_simulation_horses WHERE simulation_id=? LIMIT 1", VetRows.MAPPER, id);
+        if (!existing.isEmpty() && existing.getFirst().get("finish_time_seconds") != null) return;
         var readings = capture(session, elapsed, true);
         if (readings.isEmpty()) return;
         var horse = db.query("SELECT * FROM race_simulation_horses WHERE simulation_id=?", VetRows.MAPPER, id).getFirst();
@@ -159,20 +184,11 @@ public class TrainingSimulationRecorder {
         db.update("UPDATE race_simulations SET actual_distance_meters=?,recovery_heart_rate=?,stamina_score=? WHERE id=?",
                 decimal(distance, 2), recoveryHr, stamina, id);
 
-        RaceSimulationMetric metric = new RaceSimulationMetric();
-        metric.setId(metricId);
-        metric.setSimulationId(id);
-        metric.setHorseId(horse.get("horse_id").toString());
-        metric.setLane(horse.get("lane") instanceof Number l ? l.intValue() : null);
-        metric.setFinishTimeSeconds(decimal(elapsed, 2));
-        metric.setAvgSpeedKmh(average);
-        metric.setMaxHeartRate(maxHr);
-        metric.setMaxBpSystolic(maxSys);
-        metric.setMaxBpDiastolic(maxDia);
-        metric.setRank(completed ? 1 : null);
-        metric.setHasInjuryAlert(alert);
-        metric.setCreatedAt(recordedAt);
-        metricRepository.saveAndFlush(metric);
+        db.update("UPDATE race_simulation_horses SET metric_id=?,finish_time_seconds=?,avg_speed_kmh=?,max_heart_rate=?,"
+                        + "max_bp_systolic=?,max_bp_diastolic=?,rank=?,has_injury_alert=?,metric_created_at=? "
+                        + "WHERE simulation_id=? AND horse_id=?",
+                metricId, decimal(elapsed, 2), average, maxHr, maxSys, maxDia, completed ? 1 : null, alert,
+                VetRows.sqlValue(recordedAt), id, horse.get("horse_id").toString());
 
         TrainingMetricsLog log = new TrainingMetricsLog();
         log.setId(metricId);

@@ -70,7 +70,6 @@ class GroomControllerTests {
         db.update("DELETE FROM horses");
         db.update("DELETE FROM stable_boxes");
         db.update("DELETE FROM refresh_tokens");
-        db.update("DELETE FROM horse_image_uploads");
         db.update("DELETE FROM users");
         groomId = addUser(GROOM, "GROOM");
         otherGroomId = addUser(OTHER_GROOM, "GROOM");
@@ -152,7 +151,7 @@ class GroomControllerTests {
     void incidentRequiresAssignmentAndNotifiesManagers() throws Exception {
         createTask(assignedHorse, groomId, "Feeding", TODAY);
         String imagePath = "incidents/" + UUID.randomUUID() + ".jpg";
-        db.update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)", imagePath, groomId, time.utcNow());
+        db.update("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)", UUID.randomUUID().toString(), groomId, "UPLOAD_HORSE_IMAGE:" + imagePath, "127.0.0.1", time.utcNow());
         String body = json.writeValueAsString(Map.of("issue_description", "Horse refused food this morning",
                 "image_url", imagePath));
         mvc.perform(post("/api/groom/horses/{id}/incidents", otherHorse).with(groom())
@@ -182,7 +181,7 @@ class GroomControllerTests {
     void incidentRejectsExternalImagesAndImagesUploadedByAnotherGroom() throws Exception {
         createTask(assignedHorse, groomId, "Feeding", TODAY);
         String imagePath = "incidents/" + UUID.randomUUID() + ".jpg";
-        db.update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)", imagePath, otherGroomId, time.utcNow());
+        db.update("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)", UUID.randomUUID().toString(), otherGroomId, "UPLOAD_HORSE_IMAGE:" + imagePath, "127.0.0.1", time.utcNow());
         for (String image : new String[]{"https://storage.test/incident.jpg", imagePath}) {
             mvc.perform(post("/api/groom/horses/{id}/incidents", assignedHorse).with(groom())
                             .contentType("application/json").content(json.writeValueAsString(Map.of("issue_description", "Horse refused food", "image_url", image))))

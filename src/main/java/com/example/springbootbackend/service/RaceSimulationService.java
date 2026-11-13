@@ -210,7 +210,7 @@ public class RaceSimulationService {
             throw new VetException(409, "SESSION_NOT_FINISHED", "Chua den gio ket thuc buoi tap");
         audit.record(actor, ip, "FINISH_RACE_SIMULATION:" + simulationId);
         var ranking = db.query("SELECT m.rank,m.horse_id,h.horse_name,m.finish_time_seconds"
-                + " FROM race_simulation_metrics m JOIN horses h ON h.id=m.horse_id"
+                + " FROM race_simulation_horses m JOIN horses h ON h.id=m.horse_id"
                 + " WHERE m.simulation_id=? AND m.rank IS NOT NULL ORDER BY m.rank,m.lane", VetRows.MAPPER, simulationId.toString());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("simulation_id", simulationId.toString());
@@ -291,14 +291,14 @@ public class RaceSimulationService {
         result.put("server_time", time.now());
         double progress = elapsed / (double) duration;
         result.put("phase", progress < 0.2 ? "Warmup" : progress < 0.7 ? "Work" : progress < 0.9 ? "Cooldown" : "Recovery");
-        var readings = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds", VetRows.MAPPER, id);
+        var readings = recorder.parseReadings(result.remove("readings_json"));
         result.put("readings", readings);
         Integer recoveryHeartRate = result.get("recovery_heart_rate") instanceof Number value ? value.intValue() : null;
         result.put("alerts", horses.size() == 1
                 ? alertPolicy.evaluate(horses.getFirst(), readings, recoveryHeartRate, RaceSimulationFormula.cadence(duration))
                 : List.of());
-        result.put("results", db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM race_simulation_metrics m"
-                + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? ORDER BY m.lane", VetRows.MAPPER, id));
+        result.put("results", db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM race_simulation_horses m"
+                + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? AND m.finish_time_seconds IS NOT NULL ORDER BY m.lane", VetRows.MAPPER, id));
         return result;
     }
 

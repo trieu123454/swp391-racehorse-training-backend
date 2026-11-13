@@ -93,6 +93,9 @@ public class HorseRegistrationRequest {
     @Column(name = "reviewed_at")
     private LocalDateTime reviewedAt;
 
+    @Column(name = "history_json", columnDefinition = "TEXT")
+    private String historyJson;
+
     public String getId() {
         return id;
     }
@@ -291,5 +294,13 @@ public class HorseRegistrationRequest {
 
     public void setReviewedAt(LocalDateTime reviewedAt) {
         this.reviewedAt = reviewedAt;
+    }
+
+    public String getHistoryJson() {
+        return historyJson;
+    }
+
+    public void setHistoryJson(String historyJson) {
+        this.historyJson = historyJson;
     }
 }

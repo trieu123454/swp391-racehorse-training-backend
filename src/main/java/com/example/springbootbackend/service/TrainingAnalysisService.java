@@ -51,7 +51,7 @@ public class TrainingAnalysisService {
                 + " LEFT JOIN race_simulations sim ON sim.training_schedule_id=ts.id AND sim.model_version>=2"
                 + " AND NOT EXISTS (SELECT 1 FROM race_simulations newer WHERE newer.training_schedule_id=sim.training_schedule_id"
                 + " AND (newer.created_at>sim.created_at OR (newer.created_at=sim.created_at AND newer.id>sim.id)))"
-                + " LEFT JOIN race_simulation_metrics m ON m.simulation_id=sim.id AND m.horse_id=ts.horse_id"
+                + " LEFT JOIN race_simulation_horses m ON m.simulation_id=sim.id AND m.horse_id=ts.horse_id"
                 + " WHERE ts.horse_id=? AND ce.event_date BETWEEN ? AND ? ORDER BY ce.event_date,ce.start_time,ts.id",
                 VetRows.MAPPER, horseId.toString(), start, end);
         var plans = db.query("SELECT p.* FROM training_plans p JOIN training_plan_horses tph ON tph.training_plan_id=p.id"

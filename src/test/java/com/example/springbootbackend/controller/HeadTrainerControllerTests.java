@@ -53,14 +53,12 @@ class HeadTrainerControllerTests {
         when(time.now()).thenReturn(NOW);
         when(time.utcNow()).thenReturn(LocalDateTime.ofInstant(NOW, ZoneOffset.UTC));
         when(time.today()).thenReturn(TODAY);
-        db.update("DELETE FROM race_simulation_metrics");
         db.update("DELETE FROM race_simulation_horses");
         db.update("DELETE FROM race_simulations");
         db.update("DELETE FROM horse_race_entries");
         db.update("DELETE FROM training_metrics_logs");
         db.update("DELETE FROM training_schedules");
         db.update("DELETE FROM calendar_events");
-        db.update("DELETE FROM training_plan_logs");
         db.update("DELETE FROM training_plans");
         db.update("DELETE FROM races");
         db.update("DELETE FROM notifications");
@@ -140,8 +138,7 @@ class HeadTrainerControllerTests {
         String unscheduledPlan = createPlan(otherHorse, "Speed block");
         call(body(patch("/api/training-plans/" + unscheduledPlan), Map.of("stage_name", "Speed block revised")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.stage_name").value("Speed block revised"));
-        assertThat(db.queryForObject("SELECT count(*) FROM training_plan_logs WHERE training_plan_id=?", Long.class, unscheduledPlan)).isEqualTo(1);
-        String changed = db.queryForObject("SELECT new_data_json FROM training_plan_logs WHERE training_plan_id=?", String.class, unscheduledPlan);
+        String changed = db.queryForObject("SELECT action_performed FROM audit_logs WHERE action_performed LIKE ?", String.class, "UPDATE_TRAINING_PLAN:" + unscheduledPlan + ":%");
         assertThat(changed).contains("stage_name").doesNotContain("objective");
     }
 
@@ -175,7 +172,7 @@ class HeadTrainerControllerTests {
         assertThat(detail.get("results").get(0).get("avg_speed_kmh").asDouble()).isGreaterThan(1.2);
         assertThat(detail.get("readings").get(detail.get("readings").size() - 1).get("elapsed_seconds").asInt()).isEqualTo(duration);
         call(body(post("/api/head-trainer/race-simulations/" + id + "/finish"), Map.of())).andExpect(status().isOk());
-        assertThat(count("race_simulation_metrics")).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT count(*) FROM race_simulation_horses WHERE finish_time_seconds IS NOT NULL", Long.class)).isEqualTo(1);
         assertThat(count("training_metrics_logs")).isEqualTo(1);
         assertThat(count("races")).isZero(); assertThat(count("horse_race_entries")).isZero();
         call(get("/api/horses/" + horse + "/training-metrics")).andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].is_simulated").value(true));
@@ -316,7 +313,7 @@ class HeadTrainerControllerTests {
             one.get(15, TimeUnit.SECONDS); two.get(15, TimeUnit.SECONDS);
         }
         assertThat(count("race_simulations")).isEqualTo(1);
-        assertThat(count("race_simulation_metrics")).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT count(*) FROM race_simulation_horses WHERE finish_time_seconds IS NOT NULL", Long.class)).isEqualTo(1);
         assertThat(count("training_metrics_logs")).isEqualTo(1);
     }
 

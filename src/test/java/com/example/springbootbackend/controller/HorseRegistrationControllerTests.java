@@ -152,7 +152,7 @@ class HorseRegistrationControllerTests {
         assertThat(db.queryForObject("SELECT microchip_number FROM horses WHERE id=?", String.class, horseId)).isEqualTo("CHIP-301");
         assertThat(db.queryForObject("SELECT passport_number FROM horses WHERE id=?", String.class, horseId)).isEqualTo("PASS-301");
         assertThat(db.queryForObject("SELECT pedigree_father FROM horses WHERE id=?", String.class, horseId)).isEqualTo("North Star");
-        assertThat(db.queryForObject("SELECT count(*) FROM horse_ownership_history WHERE horse_id=?", Integer.class, horseId)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT ownership_history_json FROM horses WHERE id=?", String.class, horseId)).contains("REGISTRATION_APPROVAL");
 
         Map<String, Object> profileEdit = new java.util.LinkedHashMap<>();
         profileEdit.put("horseName", "River Song");

@@ -80,6 +80,22 @@ public class TrainingSchedule {
     @Column(name = "review_updated_at")
     private LocalDateTime reviewUpdatedAt;
 
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "video_id", length = 36)
+    private String videoId;
+
+    @Column(name = "video_url", length = 512)
+    private String videoUrl;
+
+    @Column(name = "video_description", length = 255)
+    private String videoDescription;
+
+    @Column(name = "video_uploaded_by")
+    private Long videoUploadedBy;
+
+    @Column(name = "video_uploaded_at")
+    private LocalDateTime videoUploadedAt;
+
     public String getId() {
         return id;
     }
@@ -238,5 +254,45 @@ public class TrainingSchedule {
 
     public void setReviewUpdatedAt(LocalDateTime reviewUpdatedAt) {
         this.reviewUpdatedAt = reviewUpdatedAt;
+    }
+
+    public String getVideoId() {
+        return videoId;
+    }
+
+    public void setVideoId(String videoId) {
+        this.videoId = videoId;
+    }
+
+    public String getVideoUrl() {
+        return videoUrl;
+    }
+
+    public void setVideoUrl(String videoUrl) {
+        this.videoUrl = videoUrl;
+    }
+
+    public String getVideoDescription() {
+        return videoDescription;
+    }
+
+    public void setVideoDescription(String videoDescription) {
+        this.videoDescription = videoDescription;
+    }
+
+    public Long getVideoUploadedBy() {
+        return videoUploadedBy;
+    }
+
+    public void setVideoUploadedBy(Long videoUploadedBy) {
+        this.videoUploadedBy = videoUploadedBy;
+    }
+
+    public LocalDateTime getVideoUploadedAt() {
+        return videoUploadedAt;
+    }
+
+    public void setVideoUploadedAt(LocalDateTime videoUploadedAt) {
+        this.videoUploadedAt = videoUploadedAt;
     }
 }
