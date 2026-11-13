@@ -37,7 +37,11 @@ Neu da co file `application-local.properties` o thu muc project, ban co the chay
 $env:SUPABASE_DB_URL="jdbc:postgresql://aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require"
 $env:SUPABASE_DB_USER="postgres.fwblgvygdbxlwgenqslz"
 $env:SUPABASE_DB_PASSWORD="YOUR_DATABASE_PASSWORD"
-$env:AUTH_JWT_SECRET="CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+$jwtBytes = New-Object byte[] 48
+$jwtRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$jwtRng.GetBytes($jwtBytes)
+$env:AUTH_JWT_SECRET = [Convert]::ToBase64String($jwtBytes)
+$jwtRng.Dispose()
 $env:GOOGLE_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"
 ```
 

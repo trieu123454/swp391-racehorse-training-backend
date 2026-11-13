@@ -27,7 +27,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN', 'HEAD_VETERINARIAN')")
 @Tag(name = "Veterinarian - Health exams")
 @SecurityRequirement(name = "bearerAuth")
 public class HealthExamController {
@@ -39,7 +39,7 @@ public class HealthExamController {
 
     @PostMapping("/horses/{horseId}/health-exams")
     @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> create(Principal user, HttpServletRequest request, @PathVariable UUID horseId,
+    public Map<String, Object> create(Principal user, HttpServletRequest request, @PathVariable("horseId") UUID horseId,
                                       @RequestBody JsonNode body) {
         return service.create(user.getName(), request.getRemoteAddr(), horseId, body);
     }
@@ -47,32 +47,32 @@ public class HealthExamController {
     @GetMapping("/horses/{horseId}/health-exams")
     public Map<String, Object> list(
             Principal user,
-            @PathVariable UUID horseId,
-            @RequestParam(required = false) LocalDate from,
-            @RequestParam(required = false) LocalDate to,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int limit
+            @PathVariable("horseId") UUID horseId,
+            @RequestParam(name = "from", required = false) LocalDate from,
+            @RequestParam(name = "to", required = false) LocalDate to,
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "limit", defaultValue = "20") int limit
     ) {
         return service.list(user.getName(), horseId, from, to, new ApiPage(page, limit));
     }
 
     @GetMapping("/health-exams/{id}")
-    public Map<String, Object> detail(Principal user, @PathVariable UUID id) {
+    public Map<String, Object> detail(Principal user, @PathVariable("id") UUID id) {
         return service.detail(user.getName(), id);
     }
 
     @GetMapping("/health-exams/{id}/logs")
     public Map<String, Object> logs(
             Principal user,
-            @PathVariable UUID id,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int limit
+            @PathVariable("id") UUID id,
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "limit", defaultValue = "20") int limit
     ) {
         return service.logs(user.getName(), id, new ApiPage(page, limit));
     }
 
     @PatchMapping("/health-exams/{id}")
-    public Map<String, Object> update(Principal user, HttpServletRequest request, @PathVariable UUID id,
+    public Map<String, Object> update(Principal user, HttpServletRequest request, @PathVariable("id") UUID id,
                                       @RequestBody JsonNode body) {
         return service.update(user.getName(), request.getRemoteAddr(), id, body);
     }

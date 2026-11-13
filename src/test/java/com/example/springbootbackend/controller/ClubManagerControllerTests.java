@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -106,6 +107,28 @@ class ClubManagerControllerTests {
         mvc.perform(patch("/api/club-manager/users/{id}/unlock", managerId)
                         .with(user("manager@test.com").roles("CLUB_MANAGER")))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void createStaffAccountCreatesUserAndSendsNotifications() throws Exception {
+        mvc.perform(post("/api/club-manager/users")
+                        .with(user("manager@test.com").roles("CLUB_MANAGER"))
+                        .contentType(APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "fullName", "Nguyễn thị Mò",
+                                "email", "indigo758@fldubai.com",
+                                "phone", "0325658292",
+                                "password", "Abcd123456",
+                                "roleName", "GROOM"
+                        ))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.email").value("indigo758@fldubai.com"))
+                .andExpect(jsonPath("$.role_name").value("GROOM"))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.must_change_password").value(true));
+
+        long newUserId = userId("indigo758@fldubai.com");
+        assertThat(db.queryForObject("SELECT count(*) FROM notifications WHERE user_id=?", Long.class, newUserId)).isEqualTo(1);
     }
 
     private void createUser(String name, String email, String role, String status) {

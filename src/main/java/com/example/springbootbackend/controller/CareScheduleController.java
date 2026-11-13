@@ -2,6 +2,7 @@ package com.example.springbootbackend.controller;
 
 import java.security.Principal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -28,7 +29,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN', 'HEAD_VETERINARIAN', 'CLUB_MANAGER')")
 @Tag(name = "Veterinarian - Periodic care")
 @SecurityRequirement(name = "bearerAuth")
 public class CareScheduleController {
@@ -50,8 +51,8 @@ public class CareScheduleController {
             @RequestParam(name = "horse_id", required = false) UUID horse,
             @RequestParam(name = "care_type", required = false) String care,
             @RequestParam(name = "due_within_days", required = false) Integer days,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int limit
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "limit", defaultValue = "20") int limit
     ) {
         return service.list(p.getName(), horse == null ? null : horse.toString(), care, days, new ApiPage(page, limit));
     }
@@ -59,35 +60,50 @@ public class CareScheduleController {
     @GetMapping("/vet/calendar")
     public Map<String, Object> calendar(
             Principal p,
-            @RequestParam(required = false) LocalDate from,
-            @RequestParam(required = false) LocalDate to,
-            @RequestParam(defaultValue = "mine") String scope,
+            @RequestParam(name = "from", required = false) LocalDate from,
+            @RequestParam(name = "to", required = false) LocalDate to,
+            @RequestParam(name = "scope", defaultValue = "mine") String scope,
             @RequestParam(name = "horse_id", required = false) UUID horse,
             @RequestParam(name = "care_type", required = false) String care,
             @RequestParam(name = "include_context", defaultValue = "false") boolean context,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int limit
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "limit", defaultValue = "20") int limit
     ) {
         return service.calendar(p.getName(), from, to, scope, horse == null ? null : horse.toString(), care, context, new ApiPage(page, limit));
     }
 
     @PostMapping("/periodic-care-schedules/{id}/book")
-    public Map<String, Object> book(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> book(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.book(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 
     @PatchMapping("/periodic-care-schedules/{id}/event")
-    public Map<String, Object> move(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody JsonNode body) {
+    public Map<String, Object> move(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.move(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 
     @PostMapping("/periodic-care-schedules/{id}/cancel-event")
-    public Map<String, Object> cancel(Principal p, HttpServletRequest r, @PathVariable UUID id) {
+    public Map<String, Object> cancel(Principal p, HttpServletRequest r, @PathVariable("id") UUID id) {
         return service.cancel(p.getName(), r.getRemoteAddr(), id.toString());
     }
 
     @PostMapping("/periodic-care-schedules/{id}/complete")
-    public Map<String, Object> complete(Principal p, HttpServletRequest r, @PathVariable UUID id, @RequestBody(required = false) JsonNode body) {
+    public Map<String, Object> complete(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody(required = false) JsonNode body) {
         return service.complete(p.getName(), r.getRemoteAddr(), id.toString(), body == null ? JsonNodeFactory.instance.objectNode() : body);
+    }
+
+    @GetMapping("/veterinarians")
+    public List<Map<String, Object>> veterinarians(Principal p) {
+        return service.veterinarians(p.getName());
+    }
+
+    @GetMapping("/veterinarian/workload")
+    public List<Map<String, Object>> workload(Principal p) {
+        return service.doctorWorkloads(p.getName());
+    }
+
+    @PatchMapping("/periodic-care-schedules/{id}/reassign")
+    public Map<String, Object> reassign(Principal p, HttpServletRequest r, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
+        return service.reassign(p.getName(), r.getRemoteAddr(), id.toString(), body);
     }
 }

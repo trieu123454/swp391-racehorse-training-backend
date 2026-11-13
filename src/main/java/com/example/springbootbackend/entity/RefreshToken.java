@@ -26,6 +26,9 @@ public class RefreshToken {
     @JoinColumn(name = "user_id", nullable = false)
     private AppUser user;
 
+    @Column(name = "session_id", nullable = false, length = 36)
+    private String sessionId;
+
     @Column(nullable = false, length = 500)
     private String token;
 
@@ -41,8 +44,9 @@ public class RefreshToken {
     protected RefreshToken() {
     }
 
-    public RefreshToken(AppUser user, String token, LocalDateTime expiresAt) {
+    public RefreshToken(AppUser user, String sessionId, String token, LocalDateTime expiresAt) {
         this.user = user;
+        this.sessionId = sessionId;
         this.token = token;
         this.expiresAt = expiresAt;
     }
@@ -60,6 +64,10 @@ public class RefreshToken {
 
     public AppUser getUser() {
         return user;
+    }
+
+    public String getSessionId() {
+        return sessionId;
     }
 
     public String getToken() {

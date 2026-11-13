@@ -23,20 +23,28 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.assertj.core.api.Assertions.*;
 
-@SpringBootTest(properties = {"spring.config.import=", "spring.datasource.url=jdbc:h2:mem:horses_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
+@SpringBootTest(properties = { "spring.config.import=",
+        "spring.datasource.url=jdbc:h2:mem:horses_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1" })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Transactional
 class HorseControllerTests {
-    @Autowired MockMvc mvc;
-    @Autowired JdbcTemplate db;
-    @Autowired ObjectMapper json;
-    @SpyBean HorseStorage storage;
+    @Autowired
+    MockMvc mvc;
+    @Autowired
+    JdbcTemplate db;
+    @Autowired
+    ObjectMapper json;
+    @SpyBean
+    HorseStorage storage;
     String box;
 
-    @BeforeEach void setup() {
+    @BeforeEach
+    void setup() {
         for (String role : List.of("CLUB_MANAGER", "HORSE_OWNER", "HEAD_TRAINER", "GROOM")) {
-            db.update("INSERT INTO users(full_name,email,password_hash,role_id,status) SELECT ?,?,'hash',role_id,'APPROVED' FROM roles WHERE role_name=?", role, role + "@test.com", role);
+            db.update(
+                    "INSERT INTO users(full_name,email,password_hash,role_id,status) SELECT ?,?,'hash',role_id,'APPROVED' FROM roles WHERE role_name=?",
+                    role, role + "@test.com", role);
         }
         box = UUID.randomUUID().toString();
         db.update("INSERT INTO stable_boxes(id,box_code,capacity) VALUES (?, 'A1',1)", box);
@@ -45,8 +53,13 @@ class HorseControllerTests {
                 .when(storage).signedUrl(anyString());
     }
 
-    long owner() { return db.queryForObject("SELECT user_id FROM users WHERE email='HORSE_OWNER@test.com'", Long.class); }
-    String body(Long owner) throws Exception { return json.writeValueAsString(Map.of("horseName", "Thunder", "stableBoxId", box, "ownerId", owner)); }
+    long owner() {
+        return db.queryForObject("SELECT user_id FROM users WHERE email='HORSE_OWNER@test.com'", Long.class);
+    }
+
+    String body(Long owner) throws Exception {
+        return json.writeValueAsString(Map.of("horseName", "Thunder", "stableBoxId", box, "ownerId", owner));
+    }
 
     String createHorse() throws Exception {
         String requestId = submitRegistration("Thunder", null);
@@ -63,7 +76,8 @@ class HorseControllerTests {
         request.put("requestType", "REGISTER");
         request.put("horseName", name);
         request.put("currentWeightKg", weight);
-        var part = new MockMultipartFile("request", "request.json", "application/json", json.writeValueAsBytes(request));
+        var part = new MockMultipartFile("request", "request.json", "application/json",
+                json.writeValueAsBytes(request));
         var document = new MockMultipartFile("documents", "ownership.pdf", "application/pdf", "%PDF-1.7".getBytes());
         var result = mvc.perform(multipart("/api/horse-owner/horse-registration-requests")
                 .file(part).file(document).with(user("HORSE_OWNER@test.com").roles("HORSE_OWNER")))
@@ -71,21 +85,25 @@ class HorseControllerTests {
         return json.readTree(result.getResponse().getContentAsString()).get("id").asText();
     }
 
-    @Test void ownershipAndPermissions() throws Exception {
+    @Test
+    void ownershipAndPermissions() throws Exception {
         String id = createHorse();
         mvc.perform(get("/api/horses/" + id).with(user("HORSE_OWNER@test.com"))).andExpect(status().isOk());
         db.update("UPDATE horses SET owner_id=NULL WHERE id=?", id);
         mvc.perform(get("/api/horses/" + id).with(user("HORSE_OWNER@test.com"))).andExpect(status().isForbidden());
-        mvc.perform(get("/api/horses/" + id + "/image").with(user("HORSE_OWNER@test.com"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/horses/" + id + "/image").with(user("HORSE_OWNER@test.com")))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/api/horses").with(user("HORSE_OWNER@test.com"))).andExpect(jsonPath("$.total").value(0));
         mvc.perform(get("/api/horses").with(user("GROOM@test.com"))).andExpect(status().isOk());
         mvc.perform(get("/api/horses")).andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/horses").with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(body(owner()))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/horses").with(user("CLUB_MANAGER@test.com")).contentType("application/json")
+                .content(body(owner()))).andExpect(status().isForbidden());
         db.update("UPDATE users SET status='PENDING' WHERE email='CLUB_MANAGER@test.com'");
         mvc.perform(get("/api/horses").with(user("CLUB_MANAGER@test.com"))).andExpect(status().isForbidden());
     }
 
-    @Test void capacityAndUpdateProtectedFields() throws Exception {
+    @Test
+    void capacityAndUpdateProtectedFields() throws Exception {
         String id = createHorse();
         String secondRequest = submitRegistration("Thunder Two", null);
         mvc.perform(patch("/api/club-manager/horse-registration-requests/" + secondRequest)
@@ -93,58 +111,85 @@ class HorseControllerTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(Map.of("action", "APPROVE", "stableBoxId", box))))
                 .andExpect(status().isConflict());
-        mvc.perform(get("/api/horses/options/stables").with(user("CLUB_MANAGER@test.com"))).andExpect(jsonPath("$.length()").value(5));
-        String update = body(owner()).replace("Thunder", "Lightning").replace("}", ",\"currentStatus\":\"Injured\",\"isTrainingLocked\":true}");
-        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(update))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning")).andExpect(jsonPath("$.current_status").value("Healthy")).andExpect(jsonPath("$.is_training_locked").value(false));
+        mvc.perform(get("/api/horses/options/stables").with(user("CLUB_MANAGER@test.com")))
+                .andExpect(jsonPath("$.length()").value(21));
+        String update = body(owner()).replace("Thunder", "Lightning").replace("}",
+                ",\"currentStatus\":\"Injured\",\"isTrainingLocked\":true}");
+        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json")
+                .content(update))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning"))
+                .andExpect(jsonPath("$.current_status").value("Healthy"))
+                .andExpect(jsonPath("$.is_training_locked").value(false));
     }
 
-    @Test void profileWeightRemainsVisibleWhenTrainingMetricsExist() throws Exception {
+    @Test
+    void profileWeightRemainsVisibleWhenTrainingMetricsExist() throws Exception {
         String createBody = body(owner()).replace("\"stableBoxId\"", "\"currentWeightKg\":500,\"stableBoxId\"");
         String requestId = submitRegistration("Thunder", 500);
         var created = mvc.perform(patch("/api/club-manager/horse-registration-requests/" + requestId)
                 .with(user("CLUB_MANAGER@test.com").roles("CLUB_MANAGER"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsBytes(Map.of("action", "APPROVE", "stableBoxId", box))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED")).andReturn();
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED")).andReturn();
         String id = json.readTree(created.getResponse().getContentAsString()).get("approved_horse_id").asText();
-        db.update("INSERT INTO training_metrics_logs(id,horse_id,body_weight_kg) VALUES (?,?,?)", UUID.randomUUID().toString(), id, 420);
+        db.update("INSERT INTO training_metrics_logs(id,horse_id,body_weight_kg) VALUES (?,?,?)",
+                UUID.randomUUID().toString(), id, 420);
 
         mvc.perform(get("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.current_weight_kg").value(500));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.current_weight_kg").value(500));
         mvc.perform(get("/api/horses").with(user("CLUB_MANAGER@test.com")))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(500));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(500));
 
-        String updateBody = body(owner()).replace("Thunder", "Lightning").replace("\"stableBoxId\"", "\"currentWeightKg\":510,\"stableBoxId\"");
-        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(updateBody))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning")).andExpect(jsonPath("$.current_weight_kg").value(510));
+        String updateBody = body(owner()).replace("Thunder", "Lightning").replace("\"stableBoxId\"",
+                "\"currentWeightKg\":510,\"stableBoxId\"");
+        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json")
+                .content(updateBody))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.horse_name").value("Lightning"))
+                .andExpect(jsonPath("$.current_weight_kg").value(510));
         mvc.perform(get("/api/horses").with(user("CLUB_MANAGER@test.com")))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(510));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].current_weight_kg").value(510));
     }
 
-    @Test void softDeleteRetainsHistoryAndRequiresConfirmation() throws Exception {
+    @Test
+    void softDeleteRetainsHistoryAndRequiresConfirmation() throws Exception {
         String id = createHorse();
-        db.update("INSERT INTO medical_records(id,horse_id,diagnosis) VALUES (?,?,'Injury')", UUID.randomUUID().toString(), id);
-        mvc.perform(get("/api/horses/" + id + "/deletion-warnings").with(user("CLUB_MANAGER@test.com"))).andExpect(jsonPath("$.medicalRecords").value(1));
+        db.update("INSERT INTO medical_records(id,horse_id,diagnosis) VALUES (?,?,'Injury')",
+                UUID.randomUUID().toString(), id);
+        mvc.perform(get("/api/horses/" + id + "/deletion-warnings").with(user("CLUB_MANAGER@test.com")))
+                .andExpect(jsonPath("$.medicalRecords").value(1));
         mvc.perform(delete("/api/horses/" + id).with(user("CLUB_MANAGER@test.com"))).andExpect(status().isBadRequest());
-        mvc.perform(delete("/api/horses/" + id + "?confirmed=true").with(user("CLUB_MANAGER@test.com"))).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
+        mvc.perform(delete("/api/horses/" + id + "?confirmed=true").with(user("CLUB_MANAGER@test.com")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
         mvc.perform(get("/api/horses/" + id).with(user("CLUB_MANAGER@test.com"))).andExpect(status().isNotFound());
-        assertThat(db.queryForObject("SELECT count(*) FROM medical_records WHERE horse_id=?", Long.class, id)).isEqualTo(1);
-        assertThat(db.queryForObject("SELECT count(*) FROM horses WHERE id=? AND deleted_at IS NOT NULL", Long.class, id)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT count(*) FROM medical_records WHERE horse_id=?", Long.class, id))
+                .isEqualTo(1);
+        assertThat(
+                db.queryForObject("SELECT count(*) FROM horses WHERE id=? AND deleted_at IS NOT NULL", Long.class, id))
+                .isEqualTo(1);
     }
 
-    @Test void validationOwnerConfirmationAndSearch() throws Exception {
+    @Test
+    void validationOwnerConfirmationAndSearch() throws Exception {
         String id = createHorse();
-        mvc.perform(get("/api/horses?search=thun&currentStatus=Healthy&isTrainingLocked=false").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(1));
-        mvc.perform(get("/api/horses?search=thun&currentStatus=Injured").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(0));
-        mvc.perform(get("/api/horses?search=%25").with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(0));
-        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json").content(body(owner()))).andExpect(status().isOk());
+        mvc.perform(get("/api/horses?search=thun&currentStatus=Healthy&isTrainingLocked=false")
+                .with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get("/api/horses?search=thun&currentStatus=Injured").with(user("HEAD_TRAINER@test.com")))
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(get("/api/horses?search=%25").with(user("HEAD_TRAINER@test.com")))
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json")
+                .content(body(owner()))).andExpect(status().isOk());
         mvc.perform(put("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")).contentType("application/json")
                 .content(body(owner()).replace("Thunder", "   "))).andExpect(status().isBadRequest());
     }
 
-    @Test void invalidAndOversizeUploadsRejected() throws Exception {
-        mvc.perform(multipart("/api/horses/images").file(new MockMultipartFile("file", "bad.png", "image/png", "not an image".getBytes())).with(user("CLUB_MANAGER@test.com"))).andExpect(status().isBadRequest());
-        mvc.perform(multipart("/api/horses/images").file(new MockMultipartFile("file", "big.png", "image/png", new byte[5 * 1024 * 1024 + 1])).with(user("CLUB_MANAGER@test.com"))).andExpect(status().isPayloadTooLarge());
+    @Test
+    void invalidAndOversizeUploadsRejected() throws Exception {
+        mvc.perform(multipart("/api/horses/images")
+                .file(new MockMultipartFile("file", "bad.png", "image/png", "not an image".getBytes()))
+                .with(user("CLUB_MANAGER@test.com"))).andExpect(status().isBadRequest());
+        mvc.perform(multipart("/api/horses/images")
+                .file(new MockMultipartFile("file", "big.png", "image/png", new byte[5 * 1024 * 1024 + 1]))
+                .with(user("CLUB_MANAGER@test.com"))).andExpect(status().isPayloadTooLarge());
     }
 }

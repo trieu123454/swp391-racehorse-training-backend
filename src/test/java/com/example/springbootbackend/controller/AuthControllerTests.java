@@ -5,6 +5,7 @@ import com.example.springbootbackend.entity.RefreshToken;
 import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.RefreshTokenRepository;
+import com.example.springbootbackend.repository.PasswordResetCodeRepository;
 import com.example.springbootbackend.repository.RoleRepository;
 import com.example.springbootbackend.service.GoogleTokenService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,6 +36,7 @@ class AuthControllerTests {
     @Autowired private AppUserRepository users;
     @Autowired private RoleRepository roles;
     @Autowired private RefreshTokenRepository tokens;
+    @Autowired private PasswordResetCodeRepository resetCodes;
     @Autowired private PasswordEncoder encoder;
     @Autowired private ObjectMapper json;
     @MockBean private GoogleTokenService google;
@@ -42,6 +44,7 @@ class AuthControllerTests {
     @BeforeEach
     void resetUsers() {
         tokens.deleteAll();
+        resetCodes.deleteAll();
         for (AppUser user : users.findAll()) {
             user.approve(null);
             users.saveAndFlush(user);
@@ -159,7 +162,7 @@ class AuthControllerTests {
     void pendingStaffCannotRefreshOrBeAutoActivated(String role) throws Exception {
         AppUser user = seed(role, "user@example.com");
         tokens.save(new RefreshToken(
-                user, "pending-refresh", java.time.LocalDateTime.now().plusDays(1)));
+                user, java.util.UUID.randomUUID().toString(), "pending-refresh", java.time.LocalDateTime.now().plusDays(1)));
         mockMvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(java.util.Map.of("refreshToken", "pending-refresh"))))
                 .andExpect(status().isBadRequest());
@@ -268,5 +271,42 @@ class AuthControllerTests {
     private ResultActions googleLogin(String role) throws Exception {
         return mockMvc.perform(post("/api/auth/google").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(java.util.Map.of("idToken", "valid-token", "roleName", role))));
+    }
+@Test
+    void forgotPasswordAndResetPasswordFlow() throws Exception {
+        AppUser seededUser = seed("HORSE_OWNER", "reset-me@example.com");
+        seededUser.approve(null);
+        users.save(seededUser);
+
+        mockMvc.perform(post("/api/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"reset-me@example.com\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").isString());
+
+        java.util.List<com.example.springbootbackend.entity.PasswordResetCode> list = resetCodes.findByEmailIgnoreCaseAndUsedFalse("reset-me@example.com");
+        assertThat(list).isNotEmpty();
+        String code = list.get(0).getCode();
+        assertThat(code).hasSize(6);
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(java.util.Map.of(
+                                "email", "reset-me@example.com",
+                                "code", code,
+                                "newPassword", "newPassword123"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới."));
+
+        // Login with old password fails
+        mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"reset-me@example.com\",\"password\":\"password123\"}"))
+                .andExpect(status().isBadRequest());
+
+        // Login with new password succeeds
+        mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"reset-me@example.com\",\"password\":\"newPassword123\"}"))
+                .andExpect(status().isOk());
     }
 }

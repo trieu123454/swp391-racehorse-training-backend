@@ -32,7 +32,7 @@ public class JwtService {
         this.jwtProperties = jwtProperties;
     }
 
-    public String createAccessToken(AppUser user) {
+    public String createAccessToken(AppUser user, String sessionId) {
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer("springboot-backend")
@@ -41,6 +41,7 @@ public class JwtService {
                 .subject(user.getEmail())
                 .claim("userId", user.getId())
                 .claim("role", user.getRole().getName())
+                .claim("sessionId", sessionId)
                 .build();
 
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();

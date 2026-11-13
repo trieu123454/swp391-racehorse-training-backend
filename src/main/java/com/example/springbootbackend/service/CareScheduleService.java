@@ -230,7 +230,7 @@ public class CareScheduleService {
         validateCare(care);
         if (horse != null) access.requireHorse(horse, false);
         if (days != null && days < 0) throw VetException.invalid("due_within_days", "Phải >= 0");
-        String from = " FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id";
+        String from = " FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id LEFT JOIN users u ON u.user_id=p.assigned_doctor_id";
         String where = " WHERE h.deleted_at IS NULL";
         var args = new ArrayList<Object>();
         if (horse != null) {
@@ -245,7 +245,7 @@ public class CareScheduleService {
             where += " AND p.next_due_date<=?";
             args.add(nextDate(time.today(), days));
         }
-        var result = data.page("SELECT p.*,ce.status AS event_status" + from, "SELECT count(*)" + from, where, " ORDER BY p.next_due_date,p.id", args, page);
+        var result = data.page("SELECT p.*,ce.status AS event_status,u.full_name AS doctor_name" + from, "SELECT count(*)" + from, where, " ORDER BY p.next_due_date,p.id", args, page);
         for (Object value : (List<?>) result.get("data")) {
             @SuppressWarnings("unchecked") var row = (Map<String, Object>) value;
             row.put("is_overdue", ((LocalDate) row.get("next_due_date")).isBefore(time.today()) && !"Completed".equals(row.remove("event_status")));
@@ -286,23 +286,83 @@ public class CareScheduleService {
             row.put("context", false);
         }
         if (context) {
-            var unique = horses.stream().distinct().toList();
-            List<Map<String, Object>> extra = List.of();
-            long total = 0;
-            if (!unique.isEmpty()) {
-                String contextWhere = " WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=? AND ce.source_table<>? AND ce.horse_id IN ("
-                        + String.join(",", Collections.nCopies(unique.size(), "?")) + ")";
-                var params = new ArrayList<Object>(List.of(from, to, SOURCE));
-                params.addAll(unique);
-                total = data.db.queryForObject("SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id" + contextWhere, Long.class, params.toArray());
-                params.add(page.limit());
-                extra = data.db.query("SELECT ce.*,h.horse_name FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id" + contextWhere + " ORDER BY ce.event_date,ce.start_time,ce.id LIMIT ?", VetRows.MAPPER, params.toArray());
-                extra.forEach(row -> row.put("context", true));
+            String contextFrom = " FROM calendar_events ce"
+                    + " JOIN horses h ON h.id=ce.horse_id"
+                    + " LEFT JOIN training_schedules ts ON ts.calendar_event_id=ce.id"
+                    + " LEFT JOIN users groom ON groom.user_id=ts.assigned_groom_id"
+                    + " LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id";
+            String contextWhere = " WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?"
+                    + " AND ce.source_table<>? AND ce.event_type IN ('Training','TrialRun','Rest','Race')"
+                    + " AND ce.status<>'Cancelled'";
+            var params = new ArrayList<Object>(List.of(from, to, SOURCE));
+            if (horse != null) {
+                contextWhere += " AND ce.horse_id=?";
+                params.add(horse);
+            }
+            long total = data.db.queryForObject("SELECT count(*)" + contextFrom + contextWhere, Long.class, params.toArray());
+            params.add(Math.max(page.limit(), 200));
+            List<Map<String, Object>> extra = data.db.query(
+                    "SELECT ce.id,ce.id AS event_id,ce.horse_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,"
+                    + "ce.source_table,ce.source_id,h.horse_name,sb.box_code,sb.section,"
+                    + "ts.session_type,ts.track_surface,ts.snapshot_stage_name AS plan_stage_name,"
+                    + "ts.target_distance_meters,ts.target_intensity,groom.full_name AS groom_name"
+                    + contextFrom + contextWhere
+                    + " ORDER BY ce.event_date,ce.start_time,h.horse_name,ce.id LIMIT ?",
+                    VetRows.MAPPER, params.toArray());
+            for (var row : extra) {
+                row.put("context", true);
+                Object hId = row.get("horse_id");
+                Object hName = row.get("horse_name");
+                if (hId != null && hName != null) {
+                    row.put("horse", Map.of("id", hId, "horse_name", hName));
+                }
             }
             result.put("context_events", extra);
             result.put("context_total", total);
         }
         return result;
+    }
+
+    public List<Map<String, Object>> veterinarians(String email) {
+        access.requireRole(email, "VETERINARIAN");
+        return data.db.queryForList(
+                "SELECT u.user_id AS id, u.full_name AS name, u.email, r.role_name "
+                + "FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE r.role_name IN ('VETERINARIAN', 'HEAD_VETERINARIAN') AND u.status='APPROVED' AND u.deleted_at IS NULL "
+                + "ORDER BY r.role_name DESC, u.full_name, u.user_id"
+        );
+    }
+
+    public List<Map<String, Object>> doctorWorkloads(String email) {
+        access.requireRole(email, "VETERINARIAN");
+        return data.db.queryForList(
+                "SELECT u.user_id AS id, u.full_name AS name, u.email, r.role_name, "
+                + "(SELECT count(*) FROM periodic_care_schedules pcs WHERE pcs.assigned_doctor_id=u.user_id) AS total_schedules, "
+                + "(SELECT count(*) FROM calendar_events ce JOIN periodic_care_schedules p ON p.id=ce.source_id AND ce.source_table='Periodic_Care_Schedules' "
+                + "  WHERE p.assigned_doctor_id=u.user_id AND ce.status='Scheduled' AND ce.event_date < CURRENT_DATE) AS overdue_count, "
+                + "(SELECT count(*) FROM calendar_events ce JOIN periodic_care_schedules p ON p.id=ce.source_id AND ce.source_table='Periodic_Care_Schedules' "
+                + "  WHERE p.assigned_doctor_id=u.user_id AND ce.status='Scheduled' AND ce.event_date = CURRENT_DATE) AS today_count "
+                + "FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE r.role_name IN ('VETERINARIAN', 'HEAD_VETERINARIAN') AND u.status='APPROVED' AND u.deleted_at IS NULL "
+                + "ORDER BY total_schedules DESC, u.full_name ASC"
+        );
+    }
+
+    @Transactional
+    public Map<String, Object> reassign(String email, String ip, String id, JsonNode body) {
+        long actor = access.requireRole(email, "VETERINARIAN");
+        var schedule = lockedSchedule(id);
+        var fields = VetInput.parse(body, "assigned_doctor_id:long");
+        Long newDoctorId = fields.get("assigned_doctor_id") == null ? null : ((Number) fields.get("assigned_doctor_id")).longValue();
+        if (newDoctorId != null) {
+            lockDoctor(newDoctorId, true);
+        }
+        data.db.update(
+                "UPDATE periodic_care_schedules SET assigned_doctor_id=?, updated_at=? WHERE id=?",
+                newDoctorId, time.now(), id
+        );
+        audit.record(actor, ip, "REASSIGN_CARE_SCHEDULE:" + id);
+        return response(id);
     }
 
     private void requireNoConflicts(String horse, long doctor, LocalDate date, LocalTime start, LocalTime end, String exclude) {
@@ -316,7 +376,7 @@ public class CareScheduleService {
         if (rows.isEmpty()) throw VetException.invalid("assigned_doctor_id", "Không tìm thấy bác sĩ");
         var user = rows.getFirst();
         String role = data.db.queryForObject("SELECT role_name FROM roles WHERE role_id=?", String.class, user.get("role_id"));
-        if (active && (!"VETERINARIAN".equals(role) || !"APPROVED".equals(user.get("status")) || user.get("deleted_at") != null))
+        if (active && (!List.of("VETERINARIAN", "HEAD_VETERINARIAN").contains(role) || !"APPROVED".equals(user.get("status")) || user.get("deleted_at") != null))
             throw VetException.invalid("assigned_doctor_id", "Phải là bác sĩ đang hoạt động");
     }
 
@@ -325,6 +385,7 @@ public class CareScheduleService {
         if (rows.isEmpty()) throw new VetException(404, "NOT_FOUND", "Không tìm thấy lịch chăm sóc");
         var row = rows.getFirst();
         if (row.get("assigned_doctor_id") != null) lockDoctor(doctor(row), false);
+        access.requireHorse(horse(row), true);
         return data.row("periodic_care_schedules", id, true);
     }
 

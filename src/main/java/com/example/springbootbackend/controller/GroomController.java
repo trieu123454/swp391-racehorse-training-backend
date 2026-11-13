@@ -50,36 +50,36 @@ public class GroomController {
     }
 
     @GetMapping("/calendar")
-    public Map<String, Object> calendar(Principal user, @RequestParam(required = false) LocalDate date) {
+    public Map<String, Object> calendar(Principal user, @RequestParam(name = "date", required = false) LocalDate date) {
         return horses.calendar(user.getName(), date);
     }
 
     @GetMapping("/horses/{horseId}")
-    public Map<String, Object> horse(Principal user, @PathVariable UUID horseId) {
+    public Map<String, Object> horse(Principal user, @PathVariable("horseId") UUID horseId) {
         return horses.horse(user.getName(), horseId);
     }
 
     @GetMapping("/horses/{horseId}/diet-records")
-    public Map<String, Object> dietRecords(Principal user, @PathVariable UUID horseId,
+    public Map<String, Object> dietRecords(Principal user, @PathVariable("horseId") UUID horseId,
             @RequestParam(name = "active_on", required = false) LocalDate activeOn) {
         return Map.of("data", horses.dietRecords(user.getName(), horseId, activeOn));
     }
 
     @PatchMapping({"/daily-tasks/{id}/complete", "/tasks/{id}/complete"})
-    public Map<String, Object> completeTask(Principal user, HttpServletRequest request, @PathVariable UUID id) {
+    public Map<String, Object> completeTask(Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
         return service.completeTask(user.getName(), request.getRemoteAddr(), id);
     }
 
     @PatchMapping("/training-schedules/{id}/complete")
     public Map<String, Object> completeTrainingSession(Principal user, HttpServletRequest request,
-            @PathVariable UUID id) {
+            @PathVariable("id") UUID id) {
         return service.completeTrainingSession(user.getName(), request.getRemoteAddr(), id);
     }
 
     @PostMapping("/horses/{horseId}/incidents")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> reportIncident(Principal user, HttpServletRequest request,
-            @PathVariable UUID horseId, @RequestBody JsonNode body) {
+            @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
         return service.reportIncident(user.getName(), request.getRemoteAddr(), horseId, body);
     }
 
@@ -93,27 +93,27 @@ public class GroomController {
 
     @PostMapping(value = "/incidents/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> uploadIncidentImage(Principal user, @RequestParam MultipartFile file) {
+    public Map<String, Object> uploadIncidentImage(Principal user, @RequestParam("file") MultipartFile file) {
         long groomId = service.requireGroom(user.getName());
         return storage.uploadIncident(file, groomId);
     }
 
     @GetMapping("/incidents")
     public Map<String, Object> incidents(Principal user,
-            @RequestParam(required = false) String status,
+            @RequestParam(name = "status", required = false) String status,
             @RequestParam(name = "horse_id", required = false) UUID horseId) {
         return service.incidents(user.getName(), status, horseId);
     }
 
     @PatchMapping("/incidents/{id}/result")
     public Map<String, Object> submitIncidentResult(Principal user, HttpServletRequest request,
-            @PathVariable UUID id, @RequestBody JsonNode body) {
+            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
         return service.submitIncidentResult(user.getName(), request.getRemoteAddr(), id, body);
     }
 
     @GetMapping("/inventory")
     public Map<String, Object> inventory(Principal user,
-            @RequestParam(required = false) String category,
+            @RequestParam(name = "category", required = false) String category,
             @RequestParam(name = "low_stock_only", defaultValue = "false") boolean lowStockOnly) {
         return inventory.groomItems(user.getName(), category, lowStockOnly);
     }
@@ -126,7 +126,7 @@ public class GroomController {
     }
 
     @GetMapping("/supply-requests")
-    public Map<String, Object> supplyRequests(Principal user, @RequestParam(required = false) String status) {
+    public Map<String, Object> supplyRequests(Principal user, @RequestParam(name = "status", required = false) String status) {
         return inventory.supplyRequests(user.getName(), false, status);
     }
 
@@ -136,14 +136,14 @@ public class GroomController {
     }
 
     @GetMapping("/inventory-transactions")
-    public Map<String, Object> inventoryTransactions(Principal user, @RequestParam(required = false) UUID itemId,
-            @RequestParam(defaultValue = "50") int limit) {
+    public Map<String, Object> inventoryTransactions(Principal user, @RequestParam(name = "itemId", required = false) UUID itemId,
+            @RequestParam(name = "limit", defaultValue = "50") int limit) {
         return inventory.transactions(user.getName(), false, itemId, limit);
     }
 
     /** Sanitized compatibility view for the earlier workspace client. */
     @GetMapping("/workspace")
-    public Map<String, Object> workspace(Principal user, @RequestParam(required = false) LocalDate date) {
+    public Map<String, Object> workspace(Principal user, @RequestParam(name = "date", required = false) LocalDate date) {
         return service.workspace(user.getName(), date);
     }
 }

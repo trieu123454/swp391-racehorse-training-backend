@@ -112,7 +112,10 @@ class GroomControllerTests {
     @Test
     void passwordChangeIsRequiredForGroomRoutes() throws Exception {
         db.update("UPDATE users SET must_change_password=TRUE WHERE user_id=?", groomId);
-        String token = jwt.createAccessToken(users.findByEmailIgnoreCase(GROOM).orElseThrow());
+        String sessionId = UUID.randomUUID().toString();
+        db.update("INSERT INTO refresh_tokens(user_id,session_id,token,expires_at) VALUES (?,?,?,?)",
+                groomId, sessionId, UUID.randomUUID().toString(), LocalDateTime.now().plusDays(1));
+        String token = jwt.createAccessToken(users.findByEmailIgnoreCase(GROOM).orElseThrow(), sessionId);
         mvc.perform(get("/api/groom/my-horses").header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));

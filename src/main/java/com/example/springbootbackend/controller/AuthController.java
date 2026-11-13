@@ -19,7 +19,9 @@ import com.example.springbootbackend.dto.request.GoogleLoginRequest;
 import com.example.springbootbackend.dto.request.LoginRequest;
 import com.example.springbootbackend.dto.request.LogoutRequest;
 import com.example.springbootbackend.dto.request.RefreshTokenRequest;
+import com.example.springbootbackend.dto.request.ForgotPasswordRequest;
 import com.example.springbootbackend.dto.request.RegisterRequest;
+import com.example.springbootbackend.dto.request.ResetPasswordRequest;
 import com.example.springbootbackend.dto.response.AuthResponse;
 import com.example.springbootbackend.dto.response.MessageResponse;
 import com.example.springbootbackend.dto.response.UserResponse;
@@ -89,17 +91,27 @@ public class AuthController {
         return new MessageResponse("Logged out");
     }
 
+    @PostMapping("/forgot-password")
+    public MessageResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return authService.forgotPassword(request);
+    }
+
+    @PostMapping("/reset-password")
+    public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return authService.resetPassword(request);
+    }
+
     @PostMapping("/users/{userId}/approve")
     @SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
-    public UserResponse approve(@PathVariable Long userId, Principal principal) {
+    public UserResponse approve(@PathVariable("userId") Long userId, Principal principal) {
         return authService.approve(userId, principal.getName());
     }
 
     @PostMapping("/users/{userId}/reject")
     @SecurityRequirement(name = "bearerAuth")
     @PreAuthorize("hasRole('CLUB_MANAGER')")
-    public UserResponse reject(@PathVariable Long userId, Principal principal) {
+    public UserResponse reject(@PathVariable("userId") Long userId, Principal principal) {
         return authService.reject(userId, principal.getName());
     }
 

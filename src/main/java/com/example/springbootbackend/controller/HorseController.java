@@ -25,27 +25,52 @@ public class HorseController {
     }
 
     @GetMapping
-    public Map<String, Object> list(Principal principal, @RequestParam(required = false) String search,
-                                    @RequestParam(required = false) String breed, @RequestParam(required = false) String currentStatus,
-                                    @RequestParam(required = false) String status, @RequestParam(required = false) UUID stableBoxId,
+    public Map<String, Object> list(Principal principal, @RequestParam(name = "search", required = false) String search,
+                                    @RequestParam(name = "breed", required = false) String breed, @RequestParam(name = "currentStatus", required = false) String currentStatus,
+                                    @RequestParam(name = "status", required = false) String status, @RequestParam(name = "stableBoxId", required = false) UUID stableBoxId,
                                     @RequestParam(name = "stable_box_id", required = false) UUID stableBoxIdSnake,
-                                    @RequestParam(required = false) Boolean isTrainingLocked, @RequestParam(name = "is_locked", required = false) Boolean lockedSnake,
-                                    @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size,
+                                    @RequestParam(name = "isTrainingLocked", required = false) Boolean isTrainingLocked, @RequestParam(name = "is_locked", required = false) Boolean lockedSnake,
+                                    @RequestParam(name = "page", defaultValue = "0") int page, @RequestParam(name = "size", defaultValue = "20") int size,
                                     @RequestParam(name = "limit", required = false) Integer limit) {
         UUID stable = stableBoxId != null ? stableBoxId : stableBoxIdSnake;
         Boolean locked = isTrainingLocked != null ? isTrainingLocked : lockedSnake;
         int actualPage = page < 1 ? 0 : page - 1;
         int actualSize = limit == null ? size : limit;
-        return horses.list(horses.actor(principal.getName(), false), search, breed, currentStatus != null ? currentStatus : status, stable, locked, actualPage, actualSize);
+        Map<String, Object> res = horses.list(horses.actor(principal.getName(), false), search, breed, currentStatus != null ? currentStatus : status, stable, locked, actualPage, actualSize);
+        if (res.get("items") instanceof List<?> listItems) {
+            for (Object obj : listItems) {
+                if (obj instanceof Map<?, ?> rawMap) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) rawMap;
+                    attachSignedImageUrl(row);
+                }
+            }
+        }
+        return res;
+    }
+
+    private void attachSignedImageUrl(Map<String, Object> horse) {
+        Object imgObj = horse.get("image_url");
+        if (imgObj instanceof String path && !path.isBlank()) {
+            try {
+                Map<String, Object> signed = storage.signedUrl(path);
+                if (signed.get("url") instanceof String signedUrl && !signedUrl.isBlank()) {
+                    horse.put("image_signed_url", signedUrl);
+                }
+            } catch (Exception ignored) {
+                // Keep non-blocking if storage signing fails for an item
+            }
+        }
     }
 
     @GetMapping("/{id}")
-    public Map<String, Object> detail(Principal p, @PathVariable UUID id) {
+    public Map<String, Object> detail(Principal p, @PathVariable("id") UUID id) {
         HorseService.Actor actor = horses.actor(p.getName(), false);
         Map<String, Object> horse = horses.detail(actor, id);
+        attachSignedImageUrl(horse);
         if (Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
             List<Map<String, Object>> documents = new ArrayList<>();
-            for (Map<String, Object> document : horses.approvedRegistrationDocuments(actor, id)) {
+            for (Map<String, Object> document : horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id)) {
                 Map<String, Object> item = new LinkedHashMap<>(document);
                 String path = Objects.toString(item.remove("object_path"), null);
                 Map<String, Object> signed = storage.signedUrl(path);
@@ -61,7 +86,7 @@ public class HorseController {
     }
 
     @GetMapping("/{id}/ownership-history")
-    public List<Map<String, Object>> ownershipHistory(Principal p, @PathVariable UUID id) {
+    public List<Map<String, Object>> ownershipHistory(Principal p, @PathVariable("id") UUID id) {
         return horses.ownershipHistory(horses.actor(p.getName(), true), id);
     }
 
@@ -72,7 +97,7 @@ public class HorseController {
     }
 
     @PutMapping("/{id}")
-    public Map<String, Object> update(Principal p, @PathVariable UUID id, @Valid @RequestBody HorseUpdateRequest r) {
+    public Map<String, Object> update(Principal p, @PathVariable("id") UUID id, @Valid @RequestBody HorseUpdateRequest r) {
         return horses.update(horses.actor(p.getName(), true), id, r);
     }
 
@@ -84,31 +109,31 @@ public class HorseController {
 
     @GetMapping("/options/owners")
     public Map<String, Object> owners(Principal p,
-                                      @RequestParam(defaultValue = "") String q,
-                                      @RequestParam(defaultValue = "0") int page,
-                                      @RequestParam(defaultValue = "20") int size) {
-        horses.actor(p.getName(), true);
+                                      @RequestParam(name = "q", defaultValue = "") String q,
+                                      @RequestParam(name = "page", defaultValue = "0") int page,
+                                      @RequestParam(name = "size", defaultValue = "20") int size) {
+        horses.ownerLookupActor(p.getName());
         return horses.owners(q, page, size);
     }
 
     @GetMapping("/{id}/deletion-warnings")
-    public Map<String, Object> warnings(Principal p, @PathVariable UUID id) {
+    public Map<String, Object> warnings(Principal p, @PathVariable("id") UUID id) {
         return horses.warnings(horses.actor(p.getName(), true), id);
     }
 
     @DeleteMapping("/{id}")
-    public Map<String, Object> delete(Principal p, @PathVariable UUID id, @RequestParam(defaultValue = "false") boolean confirmed) {
+    public Map<String, Object> delete(Principal p, @PathVariable("id") UUID id, @RequestParam(name = "confirmed", defaultValue = "false") boolean confirmed) {
         return horses.delete(horses.actor(p.getName(), true), id, confirmed);
     }
 
     @PostMapping(value = "/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> upload(Principal p, @RequestParam MultipartFile file) {
+    public Map<String, Object> upload(Principal p, @RequestParam("file") MultipartFile file) {
         return storage.upload(file, horses.actor(p.getName(), true).id());
     }
 
     @GetMapping("/{id}/image")
-    public Map<String, Object> image(Principal p, @PathVariable UUID id) {
+    public Map<String, Object> image(Principal p, @PathVariable("id") UUID id) {
         return storage.signedUrl((String) horses.detail(horses.actor(p.getName(), false), id).get("image_url"));
     }
 }

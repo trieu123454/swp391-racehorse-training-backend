@@ -281,7 +281,6 @@ public class HeadTrainerService {
         var session = rows.getFirst();
         if (!"Completed".equals(session.get("status")))
             throw new VetException(409, "SESSION_NOT_COMPLETED", "Chi ghi chi so sau khi buoi tap da hoan tat");
-        assertSessionAlreadyOccurred(schedule);
         Map<String, Object> fields = VetInput.parse(body,
                 "body_weight_kg:number", "max_heart_rate:int", "avg_speed_kmh:number", "stamina_score:number",
                 "trainer_review:0", "bp_systolic:int", "bp_diastolic:int");
@@ -475,7 +474,7 @@ public class HeadTrainerService {
         if (!"Rest".equals(fields.get("session_type"))) {
             trainingGuard.assertHorseNotLocked(horse);
             VetInput.required(fields, "training_plan_id");
-        } else access.requireHorse(horse, false);
+        } else access.requireHorse(horse, true);
         VetInput.required(fields, "event_date", "start_time", "end_time");
         LocalDate date = (LocalDate) fields.get("event_date");
         LocalTime start = (LocalTime) fields.get("start_time");
@@ -546,21 +545,335 @@ public class HeadTrainerService {
         if (horseId != null) { where += " AND ts.horse_id=?"; args.add(horseId.toString()); }
         if (groomId != null) { where += " AND ts.assigned_groom_id=?"; args.add(groomId); }
         String fromSql = " FROM calendar_events ce JOIN training_schedules ts ON ts.calendar_event_id=ce.id"
-                + " JOIN horses h ON h.id=ts.horse_id LEFT JOIN users groom ON groom.user_id=ts.assigned_groom_id"
+                + " JOIN horses h ON h.id=ts.horse_id LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id"
+                + " LEFT JOIN users groom ON groom.user_id=ts.assigned_groom_id"
                 + " LEFT JOIN training_plans p ON p.id=ts.training_plan_id";
         Long total = db.queryForObject("SELECT count(*)" + fromSql + where, Long.class, args.toArray());
         List<Object> queryArgs = new ArrayList<>(args);
         queryArgs.add(page.limit());
         queryArgs.add(page.offset());
         var events = db.query("SELECT ce.id AS event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,"
-                + "ce.status,ts.id AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,"
-                + "h.id AS horse_id,h.horse_name,h.image_url,ts.training_plan_id,ts.assigned_groom_id,"
+                + "ce.status,ts.id AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,ts.trainer_review,"
+                + "h.id AS horse_id,h.horse_name,h.image_url,sb.box_code,sb.section,ts.training_plan_id,ts.assigned_groom_id,"
                 + "ts.snapshot_stage_name AS plan_stage_name,ts.snapshot_objective AS plan_objective,"
                 + "ts.target_distance_meters AS plan_target_distance_meters,ts.snapshot_workload_minutes AS plan_target_workload_minutes,"
                 + "ts.snapshot_track_surface AS plan_target_track_surface,ts.target_intensity AS plan_target_intensity,"
                 + "groom.full_name AS groom_name" + fromSql + where
                 + " ORDER BY ce.event_date,ce.start_time,h.horse_name LIMIT ? OFFSET ?", VetRows.MAPPER, queryArgs.toArray());
-        return Map.of("data", events, "total", total, "page", page.page(), "limit", page.limit());
+
+        if (!events.isEmpty()) {
+            List<String> scheduleIds = events.stream()
+                    .map(row -> Objects.toString(row.get("training_schedule_id"), ""))
+                    .filter(s -> !s.isBlank())
+                    .distinct()
+                    .toList();
+            if (!scheduleIds.isEmpty()) {
+                String placeholders = String.join(",", Collections.nCopies(scheduleIds.size(), "?"));
+                var metricRows = db.query("SELECT id,horse_id,training_schedule_id,recorded_by,body_weight_kg,max_heart_rate,"
+                        + "avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,bp_diastolic,"
+                        + "is_simulated,recorded_at FROM shared_training_metrics WHERE training_schedule_id IN (" + placeholders + ")"
+                        + " ORDER BY recorded_at DESC,id DESC", VetRows.MAPPER, scheduleIds.toArray());
+                Map<String, List<Map<String, Object>>> metricsBySchedule = new LinkedHashMap<>();
+                for (var m : metricRows) {
+                    String sid = Objects.toString(m.get("training_schedule_id"), "");
+                    metricsBySchedule.computeIfAbsent(sid, k -> new ArrayList<>()).add(m);
+                }
+                for (var ev : events) {
+                    String sid = Objects.toString(ev.get("training_schedule_id"), "");
+                    List<Map<String, Object>> mList = metricsBySchedule.getOrDefault(sid, List.of());
+                    ev.put("metrics", mList);
+                    ev.put("latest_metric", mList.isEmpty() ? null : mList.getFirst());
+                }
+            }
+        }
+
+        String careWhere = " WHERE ce.event_type NOT IN ('Training','TrialRun','Rest','CareTask') AND ce.status<>'Cancelled' AND h.deleted_at IS NULL";
+        List<Object> careArgs = new ArrayList<>();
+        if (from != null) { careWhere += " AND ce.event_date>=?"; careArgs.add(from); }
+        if (to != null) { careWhere += " AND ce.event_date<=?"; careArgs.add(to); }
+        if (horseId != null) { careWhere += " AND ce.horse_id=?"; careArgs.add(horseId.toString()); }
+        var careEvents = new ArrayList<>(db.query("SELECT ce.id AS event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,"
+                + "ce.status,ce.source_table,ce.source_id,h.id AS horse_id,h.horse_name,sb.box_code,sb.section,"
+                + "pcs.care_type,pcs.assigned_doctor_id,doc.full_name AS doctor_name,"
+                + "dtl.task_type,dtl.groom_id,g.full_name AS groom_name "
+                + "FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
+                + "LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id "
+                + "LEFT JOIN periodic_care_schedules pcs ON (pcs.id=ce.source_id OR pcs.calendar_event_id=ce.id) "
+                + "LEFT JOIN users doc ON doc.user_id=pcs.assigned_doctor_id "
+                + "LEFT JOIN daily_task_logs dtl ON dtl.id=ce.source_id AND ce.source_table='daily_task_logs' "
+                + "LEFT JOIN users g ON g.user_id=dtl.groom_id" + careWhere
+                + " ORDER BY ce.event_date,ce.start_time NULLS LAST,h.horse_name", VetRows.MAPPER, careArgs.toArray()));
+
+        // Include unbooked or overdue periodic_care_schedules rules so Head Trainer calendar stays 100% in sync with Veterinarian calendar
+        String ruleWhere = " WHERE h.deleted_at IS NULL";
+        List<Object> ruleArgs = new ArrayList<>();
+        if (horseId != null) {
+            ruleWhere += " AND p.horse_id=?";
+            ruleArgs.add(horseId.toString());
+        }
+        var ruleRows = db.query("SELECT p.id,p.horse_id,p.care_type,p.frequency_days,p.next_due_date,p.assigned_doctor_id,"
+                + "p.calendar_event_id,ce.status AS event_status,h.horse_name,sb.box_code,sb.section,doc.full_name AS doctor_name "
+                + "FROM periodic_care_schedules p "
+                + "JOIN horses h ON h.id=p.horse_id "
+                + "LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id "
+                + "LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id "
+                + "LEFT JOIN users doc ON doc.user_id=p.assigned_doctor_id"
+                + ruleWhere + " ORDER BY p.next_due_date,p.id", VetRows.MAPPER, ruleArgs.toArray());
+        LocalDate todayDate = time.today();
+        boolean currentWeekViewed = from != null && to != null && !todayDate.isBefore(from) && !todayDate.isAfter(to);
+        for (var rule : ruleRows) {
+            Object dueObj = rule.get("next_due_date");
+            if (!(dueObj instanceof LocalDate dueDate)) continue;
+            String evStatus = Objects.toString(rule.get("event_status"), "");
+            boolean hasFreq = rule.get("frequency_days") != null;
+            if (!hasFreq && "Completed".equals(evStatus)) continue;
+            boolean appointmentIsBooked = rule.get("calendar_event_id") != null
+                    && !"Cancelled".equals(evStatus) && !"Completed".equals(evStatus);
+            if (appointmentIsBooked) continue;
+
+            boolean dueInRange = (from == null || !dueDate.isBefore(from)) && (to == null || !dueDate.isAfter(to));
+            boolean overdue = dueDate.isBefore(todayDate) && (!"Completed".equals(evStatus) || hasFreq);
+            boolean pinOverdueToToday = currentWeekViewed && dueDate.isBefore(from) && overdue;
+            if (!dueInRange && !pinOverdueToToday) continue;
+
+            String ruleId = Objects.toString(rule.get("id"), "");
+            boolean alreadyShown = careEvents.stream().anyMatch(ev ->
+                    ruleId.equals(Objects.toString(ev.get("source_id"), ""))
+                    && dueDate.equals(ev.get("event_date")));
+            if (alreadyShown) continue;
+
+            Map<String, Object> dueItem = new LinkedHashMap<>();
+            dueItem.put("event_id", "periodic-" + ruleId);
+            dueItem.put("event_type", rule.get("care_type"));
+            dueItem.put("care_type", rule.get("care_type"));
+            dueItem.put("title", rule.get("care_type"));
+            dueItem.put("event_date", pinOverdueToToday ? todayDate : dueDate);
+            dueItem.put("due_date", dueDate);
+            dueItem.put("start_time", null);
+            dueItem.put("end_time", null);
+            dueItem.put("status", "Scheduled");
+            dueItem.put("source_table", "Periodic_Care_Schedules");
+            dueItem.put("source_id", ruleId);
+            dueItem.put("horse_id", rule.get("horse_id"));
+            dueItem.put("horse_name", rule.get("horse_name"));
+            dueItem.put("box_code", rule.get("box_code"));
+            dueItem.put("section", rule.get("section"));
+            dueItem.put("assigned_doctor_id", rule.get("assigned_doctor_id"));
+            dueItem.put("doctor_name", rule.get("doctor_name"));
+            dueItem.put("is_periodic_due", true);
+            careEvents.add(dueItem);
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("data", events);
+        response.put("care_events", careEvents);
+        response.put("total", total);
+        response.put("page", page.page());
+        response.put("limit", page.limit());
+        return response;
+    }
+
+    private record CleanRegimenSpec(
+            String key,
+            String stageName,
+            String intensity,
+            int distanceMeters,
+            int workloadMinutes,
+            String trackSurface,
+            int sessionsPerWeek,
+            String sessionType,
+            String objective
+    ) {}
+
+    private static final List<CleanRegimenSpec> CLEAN_REGIMENS = List.of(
+            new CleanRegimenSpec("HIGH_SPRINT", "Liệu trình CAO — Nước rút Thi đấu (1.800m)", "High", 1800, 270, "Turf", 3, "Training", "1.800m · Sân cỏ · 3 lượt × 600m (nghỉ 12p)"),
+            new CleanRegimenSpec("HIGH_ENDURANCE", "Liệu trình CAO — Sức bền Đường dài (2.400m)", "High", 2400, 270, "Dirt", 3, "Training", "2.400m · Sân đất · 4 lượt × 600m (nghỉ 10p)"),
+            new CleanRegimenSpec("HIGH_TRIAL", "Liệu trình CAO — Chạy thử Bấm giờ (1.600m)", "High", 1600, 180, "Turf", 2, "TrialRun", "1.600m · Sân cỏ · 3 lượt × 533m (chạy thử bấm giờ)"),
+            new CleanRegimenSpec("MEDIUM_ENDURANCE", "Liệu trình VỪA — Thể lực Hằng ngày (1.200m)", "Medium", 1200, 180, "Dirt", 2, "Training", "1.200m · Sân đất · 2 lượt × 600m (nghỉ 15p)"),
+            new CleanRegimenSpec("MEDIUM_INTERVAL", "Liệu trình VỪA — Biến tốc Nhịp độ (1.400m)", "Medium", 1400, 180, "Turf", 2, "Training", "1.400m · Sân cỏ · 2 lượt × 700m (nghỉ 15p)"),
+            new CleanRegimenSpec("MEDIUM_ADAPT", "Liệu trình VỪA — Kỹ thuật & Giảm chấn (1.000m)", "Medium", 1000, 180, "Synthetic", 2, "Training", "1.000m · Sân nhân tạo · 2 lượt × 500m (nghỉ 15p)"),
+            new CleanRegimenSpec("LOW_REHAB", "Liệu trình THẤP — Phục hồi Sau chấn thương (600m)", "Low", 600, 90, "Synthetic", 1, "Training", "600m · Sân nhân tạo · 2 lượt × 300m (nghỉ 15p)"),
+            new CleanRegimenSpec("LOW_LIGHT", "Liệu trình THẤP — Chạy kiệu Giãn cơ (800m)", "Low", 800, 90, "Turf", 1, "Training", "800m · Sân cỏ · 2 lượt × 400m (nghỉ 15p)"),
+            new CleanRegimenSpec("LOW_RECOVERY", "Liệu trình THẤP — Thả lỏng Sau giải đấu (400m)", "Low", 400, 90, "Synthetic", 1, "Training", "400m · Sân nhân tạo · 2 lượt × 200m (đi bộ & thả lỏng)")
+    );
+
+    private static final List<LocalTime[]> TIMETABLE_SLOTS = List.of(
+            new LocalTime[]{LocalTime.of(7, 0), LocalTime.of(8, 30)},
+            new LocalTime[]{LocalTime.of(8, 45), LocalTime.of(10, 15)},
+            new LocalTime[]{LocalTime.of(10, 30), LocalTime.of(12, 0)},
+            new LocalTime[]{LocalTime.of(12, 30), LocalTime.of(14, 0)},
+            new LocalTime[]{LocalTime.of(14, 15), LocalTime.of(15, 45)},
+            new LocalTime[]{LocalTime.of(16, 15), LocalTime.of(17, 45)}
+    );
+
+    private CleanRegimenSpec recommendSpecForHorse(Map<String, Object> row) {
+        String readiness = Objects.toString(row.get("readiness_status"), "Unknown");
+        Double stamina = row.get("stamina_score") instanceof Number n ? n.doubleValue() : null;
+        Integer maxHr = row.get("max_heart_rate") instanceof Number n ? n.intValue() : null;
+        boolean hasAlert = Boolean.TRUE.equals(row.get("has_injury_alert"));
+
+        if (hasAlert || "NotReady".equals(readiness) || (stamina != null && stamina < 5.5) || (maxHr != null && maxHr > 215)) {
+            return (stamina != null && stamina >= 4.5 && !hasAlert) ? CLEAN_REGIMENS.get(7) : CLEAN_REGIMENS.get(6);
+        }
+        if ("Ready".equals(readiness) && (stamina == null || stamina >= 7.0)) {
+            return (stamina != null && stamina >= 8.5) ? CLEAN_REGIMENS.get(1) : CLEAN_REGIMENS.get(0);
+        }
+        return (stamina != null && stamina >= 6.5) ? CLEAN_REGIMENS.get(4) : CLEAN_REGIMENS.get(3);
+    }
+
+    @Transactional
+    public Map<String, Object> resetAndSeedCleanTrainingData(String email, String ip) {
+        long actor = requireTrainer(email);
+        LocalDate todayDate = time.today();
+        LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
+
+        // 1. Delete all existing training simulations, schedules, training calendar events, and training plans cleanly
+        db.update("DELETE FROM training_simulation_readings WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
+        db.update("DELETE FROM race_simulation_metrics WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
+        db.update("DELETE FROM race_simulation_horses WHERE simulation_id IN (SELECT id FROM race_simulations WHERE training_schedule_id IS NOT NULL)");
+        db.update("DELETE FROM race_simulations WHERE training_schedule_id IS NOT NULL");
+        db.update("DELETE FROM training_metrics_logs WHERE is_simulated = TRUE AND training_schedule_id IS NOT NULL");
+        db.update("UPDATE training_metrics_logs SET training_schedule_id = NULL WHERE training_schedule_id IS NOT NULL");
+        db.update("DELETE FROM training_videos WHERE training_schedule_id IS NOT NULL");
+        int deletedSchedules = db.update("DELETE FROM training_schedules");
+        db.update("DELETE FROM calendar_events WHERE lower(source_table)='training_schedules' OR event_type IN ('Training','TrialRun','Rest')");
+        db.update("DELETE FROM training_plan_logs");
+        db.update("DELETE FROM training_plan_horses");
+        int deletedPlans = db.update("DELETE FROM training_plans");
+
+        // 2. Query all active, unlocked horses with their latest metric snapshot
+        var horses = db.query("WITH ranked AS ("
+                + " SELECT m.*,row_number() OVER(PARTITION BY horse_id ORDER BY recorded_at DESC,id DESC) AS rn"
+                + " FROM shared_training_metrics m)"
+                + " SELECT h.id,h.horse_name,h.readiness_status,h.is_training_locked,"
+                + " latest.max_heart_rate,latest.avg_speed_kmh,latest.stamina_score,latest.has_injury_alert"
+                + " FROM horses h LEFT JOIN ranked latest ON latest.horse_id=h.id AND latest.rn=1"
+                + " WHERE h.deleted_at IS NULL AND h.is_training_locked=FALSE"
+                + " ORDER BY h.horse_name,h.id", VetRows.MAPPER);
+
+        // 3. Query active Grooms
+        var grooms = db.query("SELECT u.user_id,u.full_name FROM users u JOIN roles r ON r.role_id=u.role_id"
+                + " WHERE r.role_name='GROOM' AND u.status='APPROVED' AND u.must_change_password=FALSE"
+                + " AND u.deleted_at IS NULL ORDER BY u.full_name,u.user_id", VetRows.MAPPER);
+        Map<Long, Integer> groomLoad = new LinkedHashMap<>();
+        for (var g : grooms) groomLoad.put(((Number) g.get("user_id")).longValue(), 0);
+
+        // 4. Collect up to 7 upcoming candidate days that still have available time slots
+        int dow = todayDate.getDayOfWeek().getValue(); // 1=Mon .. 7=Sun
+        LocalDate monday = todayDate.minusDays(dow - 1);
+        LocalTime lastSlotStart = TIMETABLE_SLOTS.get(TIMETABLE_SLOTS.size() - 1)[0];
+        List<LocalDate> candidateDays = new ArrayList<>();
+        for (int i = 0; i < 14 && candidateDays.size() < 7; i++) {
+            LocalDate d = todayDate.plusDays(i);
+            if (d.equals(now.toLocalDate()) && !LocalDateTime.of(d, lastSlotStart).isAfter(now.plusMinutes(5))) {
+                continue;
+            }
+            candidateDays.add(d);
+        }
+
+        LocalDate planStart = monday;
+        LocalDate planEnd = todayDate.plusDays(60);
+        int createdPlans = 0;
+        int createdSchedules = 0;
+        int slotCursor = 0;
+
+        for (var horseRow : horses) {
+            String horseId = horseRow.get("id").toString();
+            CleanRegimenSpec spec = recommendSpecForHorse(horseRow);
+
+            // Create 1 clean TrainingPlan for this horse
+            String planId = UUID.randomUUID().toString();
+            db.update("INSERT INTO training_plans(id,horse_id,stage_name,start_date,end_date,objective,"
+                            + "target_distance_meters,target_workload_minutes,target_track_surface,target_intensity,"
+                            + "created_by,update_deadline_hours,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,24,?)",
+                    planId, horseId, spec.stageName(), planStart, planEnd, spec.objective(),
+                    spec.distanceMeters(), spec.workloadMinutes(), spec.trackSurface(), spec.intensity(),
+                    actor, time.utcNow());
+            db.update("INSERT INTO training_plan_horses(training_plan_id,horse_id) VALUES (?,?)", planId, horseId);
+            createdPlans++;
+
+            // Create conflict-free TrainingSchedules for this horse according to spec.sessionsPerWeek()
+            int needed = spec.sessionsPerWeek();
+            int scheduled = 0;
+            LocalDate lastDay = null;
+
+            for (LocalDate day : candidateDays) {
+                if (scheduled >= needed) break;
+                if (lastDay != null && lastDay.plusDays(1).equals(day) && candidateDays.size() > needed * 2) {
+                    continue;
+                }
+
+                boolean bookedOnDay = false;
+                for (int attempt = 0; attempt < TIMETABLE_SLOTS.size(); attempt++) {
+                    int slotIdx = (slotCursor + attempt) % TIMETABLE_SLOTS.size();
+                    LocalTime start = TIMETABLE_SLOTS.get(slotIdx)[0];
+                    LocalTime end = TIMETABLE_SLOTS.get(slotIdx)[1];
+                    if (day.equals(now.toLocalDate()) && !LocalDateTime.of(day, start).isAfter(now.plusMinutes(5))) {
+                        continue;
+                    }
+
+                    // Sort grooms by least workload
+                    List<Long> sortedGrooms = new ArrayList<>(groomLoad.keySet());
+                    sortedGrooms.sort((a, b) -> Integer.compare(groomLoad.getOrDefault(a, 0), groomLoad.getOrDefault(b, 0)));
+
+                    Long chosenGroom = null;
+                    boolean slotConflictFree = false;
+                    if (sortedGrooms.isEmpty()) {
+                        var c = conflicts.checkCalendarConflicts(horseId, day, start, end, null, null, null);
+                        if (c.isEmpty()) slotConflictFree = true;
+                    } else {
+                        for (Long gId : sortedGrooms) {
+                            var c = conflicts.checkCalendarConflicts(horseId, day, start, end, null, gId, "GROOM");
+                            if (c.isEmpty()) {
+                                chosenGroom = gId;
+                                slotConflictFree = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!slotConflictFree) continue;
+
+                    String scheduleId = UUID.randomUUID().toString();
+                    String eventId = UUID.randomUUID().toString();
+                    String note = "[" + spec.stageName() + "] " + spec.objective();
+                    db.update("INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,"
+                                    + "source_table,source_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,'Scheduled',?,?,?,?)",
+                            eventId, horseId, spec.sessionType(), spec.sessionType(), day, start, end,
+                            CalendarEventSources.TRAINING_SCHEDULES, scheduleId, actor, time.utcNow());
+                    db.update("INSERT INTO training_schedules(id,calendar_event_id,horse_id,training_plan_id,session_type,"
+                                    + "track_surface,assigned_groom_id,status,notes,created_by,"
+                                    + "target_distance_meters,target_intensity,snapshot_stage_name,snapshot_objective,"
+                                    + "snapshot_workload_minutes,snapshot_track_surface,snapshot_start_date,snapshot_end_date)"
+                                    + " VALUES (?,?,?,?,?,?,?,'Scheduled',?,?,?,?,?,?,?,?,?,?)",
+                            scheduleId, eventId, horseId, planId, spec.sessionType(),
+                            spec.trackSurface(), chosenGroom, note, actor,
+                            spec.distanceMeters(), spec.intensity(), spec.stageName(), spec.objective(),
+                            spec.workloadMinutes(), spec.trackSurface(), planStart, planEnd);
+
+                    if (chosenGroom != null) {
+                        groomLoad.put(chosenGroom, groomLoad.getOrDefault(chosenGroom, 0) + 1);
+                    }
+                    slotCursor = (slotIdx + 1) % TIMETABLE_SLOTS.size();
+                    lastDay = day;
+                    scheduled++;
+                    createdSchedules++;
+                    bookedOnDay = true;
+                    break;
+                }
+                if (!bookedOnDay) {
+                    // Try next day
+                }
+            }
+        }
+
+        audit.record(actor, ip, "RESET_AND_SEED_CLEAN_TRAINING_DATA:plans=" + createdPlans + ",schedules=" + createdSchedules);
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("deleted_plans", deletedPlans);
+        res.put("deleted_schedules", deletedSchedules);
+        res.put("created_plans", createdPlans);
+        res.put("created_schedules", createdSchedules);
+        return res;
     }
 
     public Map<String, Object> grooms(String email) {
@@ -606,8 +919,62 @@ public class HeadTrainerService {
         var snapshot = scheduleRow(id, false);
         boolean horseBlocked = trainingGuard.isHorseBlocked(snapshot.get("horse_id").toString());
         var session = scheduleRow(id, true);
-        Map<String, Object> fields = VetInput.parse(body, "status:20", "notes:0", "trainer_review:0", "training_plan_id:uuid", "target_distance_meters:int", "target_intensity:20", "track_surface:50");
+        Map<String, Object> fields = VetInput.parse(body, "status:20", "notes:0", "trainer_review:0",
+                "training_plan_id:uuid", "target_distance_meters:int", "target_intensity:20", "track_surface:50",
+                "event_date:date", "start_time:time", "end_time:time", "assigned_groom_id:long");
         if (fields.isEmpty()) return scheduleDetail(id);
+        boolean rescheduling = List.of("event_date", "start_time", "end_time", "assigned_groom_id")
+                .stream().anyMatch(fields::containsKey);
+        if (rescheduling) {
+            String curSt = Objects.toString(session.get("status"), "");
+            if (!List.of("Scheduled", "Missed", "Blocked").contains(curSt))
+                throw new VetException(409, "SCHEDULE_ALREADY_CLOSED", "Chi co the doi lich buoi tap chua hoan thanh hoac chua huy");
+            if (horseBlocked && !"Rest".equals(session.get("session_type")))
+                trainingGuard.assertHorseNotLocked(session.get("horse_id").toString());
+            var event = eventForSchedule(id);
+            LocalDate newDate = fields.get("event_date") != null ? (LocalDate) fields.get("event_date") : (LocalDate) event.get("event_date");
+            LocalTime newStart = fields.get("start_time") != null ? (LocalTime) fields.get("start_time") : (LocalTime) event.get("start_time");
+            LocalTime newEnd = fields.get("end_time") != null ? (LocalTime) fields.get("end_time") : (LocalTime) event.get("end_time");
+            if (newDate.isBefore(time.today()))
+                throw VetException.invalid("event_date", "Ngay tap moi khong duoc o qua khu");
+            if (newStart != null && newEnd != null && !newEnd.isAfter(newStart))
+                throw VetException.invalid("end_time", "Phai sau start_time");
+            String horseIdStr = session.get("horse_id").toString();
+            String eventIdStr = event.get("id").toString();
+            var horseConflicts = conflicts.checkCalendarConflicts(horseIdStr, newDate, newStart, newEnd,
+                    eventIdStr, null, null);
+            if (!horseConflicts.isEmpty()) throw scheduleConflict(horseConflicts);
+
+            Long groomId = fields.containsKey("assigned_groom_id")
+                    ? (fields.get("assigned_groom_id") == null ? null : ((Number) fields.get("assigned_groom_id")).longValue())
+                    : asLong(session.get("assigned_groom_id"));
+            if (groomId != null) {
+                requireGroom(groomId);
+                var groomConflicts = conflicts.checkCalendarConflicts(horseIdStr, newDate, newStart, newEnd,
+                        eventIdStr, groomId, "GROOM");
+                if (!groomConflicts.isEmpty()) {
+                    // Nếu Groom hiện tại bận ca này với ngựa khác, thử tìm Groom rảnh trong ca mới
+                    var allGrooms = db.query("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id"
+                            + " WHERE r.role_name='GROOM' AND u.status='APPROVED' AND u.must_change_password=FALSE"
+                            + " AND u.deleted_at IS NULL ORDER BY u.user_id", VetRows.MAPPER);
+                    for (var gRow : allGrooms) {
+                        Long candidateId = ((Number) gRow.get("user_id")).longValue();
+                        if (conflicts.checkCalendarConflicts(horseIdStr, newDate, newStart, newEnd,
+                                eventIdStr, candidateId, "GROOM").isEmpty()) {
+                            groomId = candidateId;
+                            break;
+                        }
+                    }
+                }
+            }
+            db.update("UPDATE calendar_events SET event_date=?,start_time=?,end_time=?,status='Scheduled' WHERE id=?",
+                    newDate, newStart, newEnd, eventIdStr);
+            db.update("UPDATE training_schedules SET assigned_groom_id=?,status='Scheduled' WHERE id=?",
+                    groomId, id);
+            session.put("status", "Scheduled");
+            session.put("assigned_groom_id", groomId);
+            if (groomId != null) notifyGroom(groomId, id, horseIdStr, newDate, newStart);
+        }
         boolean editingTargets = List.of("training_plan_id", "target_distance_meters", "target_intensity", "track_surface")
                 .stream().anyMatch(fields::containsKey);
         if (editingTargets) {
@@ -653,7 +1020,7 @@ public class HeadTrainerService {
             VetInput.choice(fields, "status", "Scheduled", "InProgress", "Completed", "Cancelled", "Missed");
             String currentStatus = Objects.toString(session.get("status"), "");
             String nextStatus = Objects.toString(fields.get("status"), "");
-            if (!List.of("Scheduled", "Blocked", "InProgress").contains(currentStatus) && !Objects.equals(nextStatus, currentStatus))
+            if (!List.of("Scheduled", "Blocked", "InProgress", "Missed").contains(currentStatus) && !Objects.equals(nextStatus, currentStatus))
                 throw new VetException(409, "SCHEDULE_ALREADY_CLOSED", "Buoi tap da Completed hoac Cancelled");
             if ("Scheduled".equals(nextStatus) && horseBlocked && !"Rest".equals(session.get("session_type")))
                 throw new VetException(409, "TRAINING_LOCKED", "Khong the mo lai lich khi ngua dang bi khoa huan luyen");
@@ -674,19 +1041,16 @@ public class HeadTrainerService {
                     && !db.query("SELECT id FROM race_simulations WHERE training_schedule_id=? AND status='Running'", VetRows.MAPPER, id).isEmpty())
                 throw new VetException(409, "SIMULATION_RUNNING", "Hay ket thuc gia lap de luu du lieu buoi tap");
             if ("Completed".equals(nextStatus) && !"Completed".equals(currentStatus)) {
-                if ("Rest".equals(session.get("session_type")) && "Scheduled".equals(currentStatus)) {
-                    assertSessionAlreadyOccurred(id);
-                } else {
-                    if (!"InProgress".equals(currentStatus))
-                        throw new VetException(409, "SESSION_NOT_STARTED", "Chi hoan tat buoi tap sau khi bat dau dung gio");
-                    assertSessionAlreadyOccurred(id);
-                }
+                if (!"InProgress".equals(currentStatus) && !("Scheduled".equals(currentStatus) && "Rest".equals(session.get("session_type"))))
+                    throw new VetException(409, "SESSION_NOT_STARTED", "Buoi tap phai duoc bat dau mo phong truoc khi hoan tat");
+                assertSessionAlreadyOccurred(id);
             }
             if (!Objects.equals(nextStatus, currentStatus)) {
                 if ("Cancelled".equals(nextStatus))
                     simulationRecorder.interruptSchedule(id, "Schedule cancelled");
                 db.update("UPDATE training_schedules SET status=? WHERE id=?", nextStatus, id);
                 db.update("UPDATE calendar_events SET status=? WHERE id=?", nextStatus, eventId(session));
+                session.put("status", nextStatus);
             }
         }
         if (fields.containsKey("trainer_review")) {
@@ -702,6 +1066,7 @@ public class HeadTrainerService {
             if (!List.of("Completed", "Cancelled", "Missed", "Blocked").contains(Objects.toString(fields.getOrDefault("status", session.get("status")), "")))
                 throw new VetException(409, "SESSION_NOT_REVIEWABLE", "Chi nhan xet buoi da ket thuc hoac dung");
             db.update("UPDATE training_schedules SET trainer_review=?,review_updated_at=? WHERE id=?", fields.get("trainer_review"), time.utcNow(), id);
+            db.update("UPDATE training_metrics_logs SET trainer_review=? WHERE training_schedule_id=?", fields.get("trainer_review"), id);
         }
         if (fields.containsKey("notes")) db.update("UPDATE training_schedules SET notes=? WHERE id=?", fields.get("notes"), id);
         audit.record(actor, ip, "UPDATE_TRAINING_SCHEDULE:" + id);

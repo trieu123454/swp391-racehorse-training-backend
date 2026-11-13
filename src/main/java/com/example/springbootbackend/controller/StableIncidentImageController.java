@@ -26,7 +26,7 @@ import com.example.springbootbackend.service.HorseStorage;
 @RequestMapping("/api/stable-incidents")
 @PreAuthorize("isAuthenticated()")
 public class StableIncidentImageController {
-    private static final Set<String> IMAGE_ROLES = Set.of("GROOM", "VETERINARIAN", "CLUB_MANAGER");
+    private static final Set<String> IMAGE_ROLES = Set.of("GROOM", "VETERINARIAN", "HEAD_VETERINARIAN", "HEAD_TRAINER", "CLUB_MANAGER");
     private final AppUserRepository users;
     private final StableIncidentRepository incidents;
     private final HorseStorage storage;
@@ -41,7 +41,7 @@ public class StableIncidentImageController {
     }
 
     @GetMapping("/{id}/image")
-    public Map<String, Object> image(Principal principal, @PathVariable UUID id) {
+    public Map<String, Object> image(Principal principal, @PathVariable("id") UUID id) {
         AppUser account = users.findByEmailIgnoreCase(principal.getName())
                 .filter(u -> u.getStatus() == UserStatus.APPROVED && !u.isMustChangePassword() && u.getDeletedAt() == null)
                 .orElseThrow(() -> new ResponseStatusException(FORBIDDEN, "Active account required"));

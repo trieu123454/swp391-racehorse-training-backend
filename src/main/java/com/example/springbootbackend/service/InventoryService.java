@@ -101,15 +101,19 @@ public class InventoryService {
             BigDecimal quantity = decimal(item.get("quantity_in_stock"));
             BigDecimal usable = decimal(item.get("usable_quantity"));
             BigDecimal expiredQuantity = decimal(item.get("expired_quantity"));
+            BigDecimal available = quantity.subtract(expiredQuantity).max(BigDecimal.ZERO);
             BigDecimal threshold = decimal(item.get("reorder_threshold"));
             LocalDate nearest = item.get("nearest_expiry_date") instanceof LocalDate value ? value : null;
             String status = stockStatus(isActive, quantity, usable, expiredQuantity, threshold, nearest, today);
+            item.put("total_quantity_in_stock", quantity);
+            item.put("quantity_in_stock", available);
+            item.put("quantity_on_hand", available);
             item.put("status", status);
-            item.put("is_low_stock", isActive && quantity.compareTo(threshold) <= 0);
+            item.put("is_low_stock", isActive && available.compareTo(threshold) <= 0);
             item.put("is_expiring", isActive && nearest != null && !nearest.isBefore(today) && !nearest.isAfter(today.plusDays(30)));
             if (isActive) {
                 active++;
-                if (quantity.compareTo(threshold) <= 0) low++;
+                if (available.compareTo(threshold) <= 0) low++;
                 if (status.equals("OUT_OF_STOCK")) out++;
                 if (status.equals("EXPIRED")) expired++;
                 if (status.equals("EXPIRING")) expiring++;
@@ -430,8 +434,21 @@ public class InventoryService {
     }
 
     private Map<String, Object> item(String id) {
-        return db.query("SELECT id,item_code,item_name,category,unit,quantity_in_stock,reorder_threshold,description,is_active,updated_at "
-                + "FROM inventory_items WHERE id=?", VetRows.MAPPER, id).getFirst();
+        LocalDate today = time.today();
+        Map<String, Object> row = db.query("SELECT i.id,i.item_code,i.item_name,i.category,i.unit,i.quantity_in_stock,"
+                + "i.reorder_threshold,i.description,i.is_active,i.updated_at,"
+                + "COALESCE((SELECT SUM(l.quantity_remaining) FROM inventory_lots l WHERE l.item_id=i.id "
+                + "AND (l.expiry_date IS NULL OR l.expiry_date>=?)),0) AS usable_quantity,"
+                + "COALESCE((SELECT SUM(l.quantity_remaining) FROM inventory_lots l WHERE l.item_id=i.id "
+                + "AND l.expiry_date<?),0) AS expired_quantity "
+                + "FROM inventory_items i WHERE i.id=?", VetRows.MAPPER, today, today, id).getFirst();
+        BigDecimal quantity = decimal(row.get("quantity_in_stock"));
+        BigDecimal expiredQuantity = decimal(row.get("expired_quantity"));
+        BigDecimal available = quantity.subtract(expiredQuantity).max(BigDecimal.ZERO);
+        row.put("total_quantity_in_stock", quantity);
+        row.put("quantity_in_stock", available);
+        row.put("quantity_on_hand", available);
+        return row;
     }
 
     private Map<String, Object> lockedItem(String id) {

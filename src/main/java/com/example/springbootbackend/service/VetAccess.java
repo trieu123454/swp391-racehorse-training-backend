@@ -32,11 +32,16 @@ public class VetAccess {
     private long requireUser(String email, String requiredRole) {
         AppUser user = userRepository.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập"));
-        if (user.getStatus() != UserStatus.APPROVED
-                || user.getDeletedAt() != null
-                || user.isMustChangePassword()
-                || (requiredRole != null && !requiredRole.equals(user.getRole().getName()))) {
-            throw new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập");
+        if (requiredRole != null) {
+            String roleName = user.getRole().getName();
+            boolean allowed = requiredRole.equals(roleName);
+            // HEAD_VETERINARIAN kế thừa toàn bộ quyền chuyên môn của VETERINARIAN
+            if (!allowed && "VETERINARIAN".equals(requiredRole) && "HEAD_VETERINARIAN".equals(roleName)) {
+                allowed = true;
+            }
+            if (!allowed) {
+                throw new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập");
+            }
         }
         return user.getId();
     }

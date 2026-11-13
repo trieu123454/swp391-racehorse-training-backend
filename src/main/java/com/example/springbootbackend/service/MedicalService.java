@@ -78,8 +78,8 @@ public class MedicalService {
         var record = data.row("medical_records", recordId, true);
         String horse = record.get("horse_id").toString();
         var fields = VetInput.parse(body, "drug_name:150", "dosage:100", "frequency:100", "route:50", "start_date:date", "end_date:date", "notes:0");
-        VetInput.required(fields, "drug_name");
         fields.putIfAbsent("start_date", time.today());
+        VetInput.required(fields, "drug_name", "start_date");
         VetInput.dates(fields, "start_date", "end_date");
         String where = " WHERE horse_id=? AND status='Active' AND lower(trim(drug_name))=lower(?) AND (end_date IS NULL OR end_date>=?)";
         var args = new ArrayList<Object>(List.of(horse, fields.get("drug_name"), fields.get("start_date")));
@@ -106,8 +106,9 @@ public class MedicalService {
         var old = data.row("prescriptions", id, true);
         if (!"Active".equals(old.get("status")))
             throw new VetException(409, "PRESCRIPTION_CLOSED", "Đơn thuốc đã kết thúc");
-        var patch = VetInput.parse(body, "dosage:100", "frequency:100", "route:50", "end_date:date", "notes:0", "status:20");
+        var patch = VetInput.parse(body, "dosage:100", "frequency:100", "route:50", "start_date:date", "end_date:date", "notes:0", "status:20");
         var merged = merge(old, patch);
+        VetInput.required(merged, "drug_name", "start_date");
         VetInput.choice(merged, "status", "Active", "Completed", "Stopped");
         if (!"Active".equals(merged.get("status"))) {
             if (merged.get("end_date") == null || ((LocalDate) merged.get("end_date")).isAfter(time.today())) {
@@ -146,10 +147,10 @@ public class MedicalService {
         var patch = VetInput.parse(body, "feed_type:100", "quantity_kg:number", "feeding_frequency:50", "special_instructions:0", "effective_date:date", "end_date:date");
         if (id == null) patch.putIfAbsent("effective_date", time.today());
         var merged = merge(old, patch);
-        VetInput.required(merged, "feed_type", "quantity_kg");
+        VetInput.required(merged, "feed_type", "quantity_kg", "effective_date");
         VetInput.number(merged, "quantity_kg", "0.01", "9999.99", 2);
         VetInput.dates(merged, "effective_date", "end_date");
-        String where = " WHERE horse_id=? AND lower(trim(feed_type))=lower(?) AND (end_date IS NULL OR end_date>=?)";
+        String where = " WHERE diet_type='TREATMENT' AND horse_id=? AND lower(trim(feed_type))=lower(?) AND (end_date IS NULL OR end_date>=?)";
         var args = new ArrayList<Object>(List.of(horse, merged.get("feed_type"), merged.get("effective_date")));
         if (merged.get("end_date") != null) {
             where += " AND (effective_date IS NULL OR effective_date<=?)";
