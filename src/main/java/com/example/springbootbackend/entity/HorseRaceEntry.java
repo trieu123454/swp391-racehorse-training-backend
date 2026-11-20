@@ -44,6 +44,9 @@ public class HorseRaceEntry {
     @Column(name = "status", length = 20)
     private String status = "Registered";
 
+    @Column(name = "cancel_reason", length = 255)
+    private String cancelReason;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -109,6 +112,14 @@ public class HorseRaceEntry {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getCancelReason() {
+        return cancelReason;
+    }
+
+    public void setCancelReason(String cancelReason) {
+        this.cancelReason = cancelReason;
     }
 
     public LocalDateTime getCreatedAt() {

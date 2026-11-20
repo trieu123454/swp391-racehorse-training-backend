@@ -106,9 +106,10 @@ public class HorseOwnerRepository {
 
     public List<Map<String, Object>> findRaceHistory(String horseId) {
         return db.queryForList("""
-                SELECT e.id AS entry_id,e.status AS entry_status,e.result_position,e.prize_amount,
+                SELECT e.id AS entry_id,e.status AS entry_status,e.cancel_reason,e.result_position,e.prize_amount,
                        e.created_at,r.id AS race_id,r.race_name,r.grade,r.distance_category,
-                       r.distance_meters,r.race_date,r.location,r.description,r.is_simulated
+                       r.distance_meters,r.race_date,r.location,r.description,r.is_simulated,
+                       COALESCE(r.status,'Scheduled') AS race_status
                 FROM horse_race_entries e
                 JOIN races r ON r.id=e.race_id
                 WHERE e.horse_id=?

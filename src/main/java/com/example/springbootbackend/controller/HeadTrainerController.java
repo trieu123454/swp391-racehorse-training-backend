@@ -176,11 +176,30 @@ public class HeadTrainerController {
         return service.updateSchedule(user.getName(), request.getRemoteAddr(), id, body);
     }
 
+    @GetMapping("/horses/{horseId}/race-entries/eligibility")
+    public Map<String, Object> raceEligibility(Principal user, @PathVariable("horseId") UUID horseId,
+            @RequestParam("race_id") UUID raceId) {
+        return service.raceEligibility(user.getName(), horseId, raceId);
+    }
+
     @PostMapping("/horses/{horseId}/race-entries")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> registerRace(Principal user, HttpServletRequest request,
             @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
         return service.registerRace(user.getName(), request.getRemoteAddr(), horseId, body);
+    }
+
+    @PostMapping("/race-entries/{entryId}/cancel")
+    @PreAuthorize("hasAnyRole('HEAD_TRAINER', 'CLUB_MANAGER')")
+    public Map<String, Object> cancelRaceEntry(Principal user, HttpServletRequest request,
+            @PathVariable("entryId") UUID entryId, @RequestBody JsonNode body) {
+        return service.cancelRaceEntry(user.getName(), request.getRemoteAddr(), entryId, body);
+    }
+
+    @PostMapping("/race-entries/{entryId}/restore")
+    public Map<String, Object> restoreRaceEntry(Principal user, HttpServletRequest request,
+            @PathVariable("entryId") UUID entryId) {
+        return service.restoreRaceEntry(user.getName(), request.getRemoteAddr(), entryId);
     }
 
     @PatchMapping("/race-entries/{entryId}/result")

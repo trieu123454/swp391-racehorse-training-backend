@@ -112,6 +112,30 @@ public class ClubManagerController {
         return service.createOfficialRace(principal.getName(), request.getRemoteAddr(), body);
     }
 
+    @PatchMapping("/races/{raceId}")
+    public Map<String, Object> updateOfficialRace(Principal principal, HttpServletRequest request,
+                                                  @PathVariable("raceId") UUID raceId, @RequestBody JsonNode body) {
+        return service.updateOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
+    }
+
+    @PostMapping("/races/{raceId}/cancel")
+    public Map<String, Object> cancelOfficialRace(Principal principal, HttpServletRequest request,
+                                                  @PathVariable("raceId") UUID raceId, @RequestBody JsonNode body) {
+        return service.cancelOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
+    }
+
+    @GetMapping("/races/{raceId}/entries")
+    public Map<String, Object> officialRaceEntries(Principal principal, @PathVariable("raceId") UUID raceId) {
+        return service.officialRaceEntries(principal.getName(), raceId);
+    }
+
+    @GetMapping("/competition-report")
+    public Map<String, Object> competitionReport(Principal principal,
+                                                 @RequestParam(name = "from", required = false) LocalDate from,
+                                                 @RequestParam(name = "to", required = false) LocalDate to) {
+        return service.competitionReport(principal.getName(), from, to);
+    }
+
     @GetMapping("/inventory-items")
     public Map<String, Object> inventoryItems(Principal principal) {
         return inventory.managerItems(principal.getName());

@@ -23,7 +23,7 @@ class DatabaseMigrationTests {
     void freshDatabaseHasCompleteSchemaAndHorseDefaults() throws Exception {
         String url = databaseUrl();
         Flyway flyway = migrations(url);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(34);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(35);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery(
@@ -84,7 +84,7 @@ class DatabaseMigrationTests {
             s.executeUpdate(
                     "insert into users(user_id,full_name,email,password_hash,role_id,status) values (17,'Owner','owner@example.com','unchanged-hash',1,'APPROVED')");
         }
-        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(33);
+        assertThat(migrations(url).migrate().migrationsExecuted).isEqualTo(34);
         try (Connection c = DriverManager.getConnection(url, "sa", ""); var s = c.createStatement()) {
             try (var rs = s.executeQuery("select * from users where user_id=17")) {
                 assertThat(rs.next()).isTrue();
@@ -191,6 +191,9 @@ class DatabaseMigrationTests {
                     .isInstanceOf(java.sql.SQLException.class);
             assertThatThrownBy(
                     () -> s.executeUpdate("insert into stable_boxes(id,box_code,capacity) values ('box-1','A1',0)"))
+                    .isInstanceOf(java.sql.SQLException.class);
+            assertThatThrownBy(() -> s.executeUpdate(
+                    "insert into races(id,race_name,race_date,status) values ('race-bad','Bad Cup','2026-10-10','Invalid')"))
                     .isInstanceOf(java.sql.SQLException.class);
         }
     }

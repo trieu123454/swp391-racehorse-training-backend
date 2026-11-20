@@ -55,12 +55,14 @@ class HeadTrainerControllerTests {
         when(time.today()).thenReturn(TODAY);
         db.update("DELETE FROM race_simulation_horses");
         db.update("DELETE FROM race_simulations");
+        db.update("DELETE FROM financial_reports");
         db.update("DELETE FROM horse_race_entries");
         db.update("DELETE FROM training_metrics_logs");
         db.update("DELETE FROM training_schedules");
         db.update("DELETE FROM calendar_events");
         db.update("DELETE FROM training_plans");
         db.update("DELETE FROM races");
+        db.update("DELETE FROM injury_markers");
         db.update("DELETE FROM notifications");
         db.update("DELETE FROM audit_logs");
         db.update("DELETE FROM horses");
@@ -372,6 +374,128 @@ class HeadTrainerControllerTests {
         call(body(patch("/api/training-schedules/" + rest), Map.of("status", "Completed"))).andExpect(status().isOk());
         assertThat(count("race_simulations")).isZero();
         assertThat(count("training_metrics_logs")).isZero();
+    }
+
+    @Test
+    void officialRaceEligibilityEnforcesHealthStatusMissedExemptionsAndWarnings() throws Exception {
+        String raceFuture = UUID.randomUUID().toString();
+        String raceNearby = UUID.randomUUID().toString();
+        db.update("INSERT INTO races(id,race_name,race_date,location,distance_meters,is_simulated,status) VALUES "
+                + "(?,'Cup A',?,'HCMC',1600,FALSE,'Scheduled'),(?,'Cup B',?,'Hanoi',1200,FALSE,'Scheduled')",
+                raceNearby, LocalDate.of(2026, 10, 5), raceFuture, LocalDate.of(2026, 10, 10));
+
+        // 1. Monitoring horse even with Ready cannot register
+        db.update("UPDATE horses SET current_status='Monitoring',readiness_status='Ready' WHERE id=?", horse);
+        call(get("/api/horses/" + horse + "/race-entries/eligibility?race_id=" + raceFuture))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eligible").value(false));
+        call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceFuture)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("HORSE_NOT_HEALTHY"));
+
+        // 2. Restore Healthy; Missed training on race date must NOT block registration
+        db.update("UPDATE horses SET current_status='Healthy',readiness_status='Ready' WHERE id=?", horse);
+        String highPlanId = createPlan(horse, "High Prep");
+        call(body(patch("/api/training-plans/" + highPlanId), Map.of("target_intensity", "High"))).andExpect(status().isOk());
+        String missedScheduleId = createSchedule(horse, highPlanId, "2026-10-10", "08:00", "09:00");
+        db.update("UPDATE training_schedules SET status='Missed' WHERE id=?", missedScheduleId);
+        db.update("UPDATE calendar_events SET status='Missed' WHERE source_table='training_schedules' AND source_id=?", missedScheduleId);
+
+        // 3. Add High intensity training on D-1 and another official race within +-7 days -> triggers soft warnings
+        createSchedule(horse, highPlanId, "2026-10-09", "07:00", "08:00");
+        call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceNearby)))
+                .andExpect(status().isCreated());
+
+        call(get("/api/horses/" + horse + "/race-entries/eligibility?race_id=" + raceFuture))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eligible").value(true))
+                .andExpect(jsonPath("$.warnings.length()").value(2));
+
+        call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceFuture)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("Registered"))
+                .andExpect(jsonPath("$.warnings.length()").value(2));
+    }
+
+    @Test
+    void raceEntryVetBlockRestoreCancelAndReregisterLifecycle() throws Exception {
+        addUser("manager@test.com", "CLUB_MANAGER");
+        addUser("owner@test.com", "HORSE_OWNER");
+        db.update("UPDATE horses SET owner_id=? WHERE id=?", uid("owner@test.com"), horse);
+
+        String raceId = UUID.randomUUID().toString();
+        db.update("INSERT INTO races(id,race_name,race_date,is_simulated,status) VALUES (?,'Autumn Derby',?,FALSE,'Scheduled')",
+                raceId, LocalDate.of(2026, 10, 12));
+
+        String entryId = result(call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceId)))
+                .andExpect(status().isCreated())).get("entry_id").asText();
+
+        // Vet locks horse -> entry automatically becomes Blocked
+        mvc.perform(body(put("/api/horses/" + horse + "/training-lock"),
+                        Map.of("lock_level", "Critical", "lock_reason", "Leg strain"))
+                .with(user("vet@test.com").roles("VETERINARIAN"))).andExpect(status().isOk());
+
+        assertThat(db.queryForObject("SELECT status FROM horse_race_entries WHERE id=?", String.class, entryId)).isEqualTo("Blocked");
+        assertThat(db.queryForObject("SELECT ce.status FROM calendar_events ce JOIN horse_race_entries e ON e.calendar_event_id=ce.id WHERE e.id=?",
+                String.class, entryId)).isEqualTo("Blocked");
+
+        // Blocked entry cannot record result
+        setNow(Instant.parse("2026-10-12T10:00:00Z"), LocalDate.of(2026, 10, 12));
+        call(body(patch("/api/race-entries/" + entryId + "/result"), Map.of("result_position", 1, "prize_amount", 1000)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("HORSE_MEDICALLY_BLOCKED"));
+
+        // Reset date back before race, unlock horse with NotReady -> restore must fail until Ready
+        setNow(NOW, TODAY);
+        db.update("UPDATE horses SET readiness_status='NotReady' WHERE id=?", horse);
+        mvc.perform(body(post("/api/horses/" + horse + "/training-unlock"), Map.of("reason", "Cleared"))
+                .with(user("vet@test.com").roles("VETERINARIAN"))).andExpect(status().isOk());
+
+        call(post("/api/race-entries/" + entryId + "/restore"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("HORSE_NOT_READY"));
+
+        db.update("UPDATE horses SET readiness_status='Ready' WHERE id=?", horse);
+        call(post("/api/race-entries/" + entryId + "/restore"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Registered"));
+
+        // Cancel entry -> frees calendar and allows re-registration
+        call(body(post("/api/race-entries/" + entryId + "/cancel"), Map.of("reason", "Chiến thuật CLB")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Cancelled"));
+        assertThat(db.queryForObject("SELECT ce.status FROM calendar_events ce JOIN horse_race_entries e ON e.calendar_event_id=ce.id WHERE e.id=?",
+                String.class, entryId)).isEqualTo("Cancelled");
+
+        call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("Registered"));
+    }
+
+    @Test
+    void officialRaceResultRejectsDuplicateRankAndPostsFinancialPrizeOnce() throws Exception {
+        String raceId = UUID.randomUUID().toString();
+        db.update("INSERT INTO races(id,race_name,race_date,is_simulated,status) VALUES (?,'Today Classic',?,FALSE,'Scheduled')",
+                raceId, TODAY);
+
+        String entry1 = result(call(body(post("/api/horses/" + horse + "/race-entries"), Map.of("race_id", raceId)))
+                .andExpect(status().isCreated())).get("entry_id").asText();
+        String entry2 = result(call(body(post("/api/horses/" + otherHorse + "/race-entries"), Map.of("race_id", raceId)))
+                .andExpect(status().isCreated())).get("entry_id").asText();
+
+        call(body(patch("/api/race-entries/" + entry1 + "/result"), Map.of("result_position", 1, "prize_amount", 5000000)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("Completed"));
+
+        call(body(patch("/api/race-entries/" + entry2 + "/result"), Map.of("result_position", 1, "prize_amount", 2000000)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("DUPLICATE_RACE_POSITION"));
+
+        call(body(patch("/api/race-entries/" + entry2 + "/result"), Map.of("result_position", 2, "prize_amount", 0)))
+                .andExpect(status().isOk());
+
+        assertThat(db.queryForObject("SELECT count(*) FROM financial_reports WHERE transaction_type='Prize'", Long.class)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM races WHERE id=?", String.class, raceId)).isEqualTo("Completed");
     }
 
     private Map<String, Object> request(String scheduleId, String horseId, String scenario) {

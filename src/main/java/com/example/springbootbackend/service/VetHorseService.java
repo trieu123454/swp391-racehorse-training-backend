@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.example.springbootbackend.exception.VetException;
 import com.fasterxml.jackson.databind.JsonNode;
 
+/** Horse medical status, training lock lifecycle, and incident resolution for Veterinarians. */
 @Service
 @Transactional(readOnly = true)
 public class VetHorseService {
@@ -198,11 +199,15 @@ public class VetHorseService {
     }
 
     private void notifyActiveOwner(long ownerId, String incidentId, String message) {
+        notifyActiveOwner(ownerId, "Stable_Incidents", incidentId, message);
+    }
+
+    private void notifyActiveOwner(long ownerId, String relatedTable, String relatedId, String message) {
         List<Long> owners = data.db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
                 + "WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' "
                 + "AND u.deleted_at IS NULL AND u.must_change_password=FALSE", Long.class, ownerId);
         for (long id : owners)
-            notifications.schedule(id, "Stable_Incidents", incidentId, message, time.now());
+            notifications.schedule(id, relatedTable, relatedId, message, time.now());
     }
 
     @Transactional
@@ -236,9 +241,11 @@ public class VetHorseService {
         data.updateRow("horses", horse, updates);
         Map<String, Object> relocation = relocateForMedicalStatus(horse, old, status);
         if (newlyLocked) {
-            blockUpcomingSessions(horse);
+            blockUpcomingSessions(horse, "Trạng thái y tế: " + status);
             notifyTrainingStaff(horse,
-                    "Ngua " + old.get("horse_name") + " bi tu dong khoa huan luyen do trang thai " + status);
+                    "Ngựa " + old.get("horse_name") + " bị tự động khóa huấn luyện do trạng thái " + status);
+        } else if (medicallyRestricted) {
+            blockUpcomingRaceEntries(horse, "Trạng thái y tế: " + status);
         }
         audit.record(actor, ip, "UPDATE_HEALTH_STATUS:" + horse + ":" + old.get("current_status") + "->" + status
                 + (fields.get("note") == null ? "" : ":" + fields.get("note")));
@@ -271,7 +278,7 @@ public class VetHorseService {
                 || !Objects.equals(old.get("lock_reason"), fields.get("lock_reason"));
         fields.put("is_training_locked", true);
         data.updateRow("horses", horse, fields);
-        blockUpcomingSessions(horse);
+        blockUpcomingSessions(horse, Objects.toString(fields.get("lock_reason"), "Khóa huấn luyện y tế"));
         if (changed)
             notifyTrainingStaff(horse, "Ngựa " + old.get("horse_name") + " bị khóa huấn luyện ("
                     + fields.get("lock_level") + "): " + fields.get("lock_reason"));
@@ -310,7 +317,17 @@ public class VetHorseService {
         data.db.update("UPDATE calendar_events ce SET status='Scheduled' FROM training_schedules ts "
                 + "WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Scheduled' AND ce.status='Blocked' "
                 + "AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')", horse, time.today());
-        notifyTrainingStaff(horse, "Ngựa " + old.get("horse_name") + " đã được mở khóa huấn luyện");
+        Long blockedRaceCount = data.db.queryForObject(
+                "SELECT count(*) FROM horse_race_entries e JOIN races r ON r.id=e.race_id "
+                        + "WHERE e.horse_id=? AND e.status='Blocked' AND r.is_simulated=FALSE "
+                        + "AND COALESCE(r.status,'Scheduled')='Scheduled' AND r.race_date>=?",
+                Long.class, horse, time.today());
+        String unlockMsg = "Ngựa " + old.get("horse_name") + " đã được mở khóa huấn luyện";
+        if (blockedRaceCount != null && blockedRaceCount > 0) {
+            unlockMsg += ". Lưu ý: còn " + blockedRaceCount
+                    + " đăng ký giải đấu chính thức đang ở trạng thái Tạm khóa (Blocked); hãy kiểm tra đánh giá Ready và khôi phục hoặc rút ngựa thủ công.";
+        }
+        notifyTrainingStaff(horse, unlockMsg);
         audit.record(actor, ip, "UNLOCK_TRAINING:" + horse + ":" + fields.get("reason"));
         return Map.of("id", horse, "is_training_locked", false, "suggest_status_update",
                 List.of("Injured", "Quarantine").contains(old.get("current_status")));
@@ -435,7 +452,7 @@ public class VetHorseService {
                 (row, index) -> row.getLong("user_id"), (Object[]) roles);
     }
 
-    private void blockUpcomingSessions(String horse) {
+    private void blockUpcomingSessions(String horse, String reasonSummary) {
         simulationRecorder.interruptHorse(horse, "Horse training locked");
         data.db.update("UPDATE training_schedules ts SET status='Blocked' FROM calendar_events ce "
                 + "WHERE ce.id=ts.calendar_event_id AND ts.horse_id=? AND ts.status IN ('Scheduled','InProgress') "
@@ -445,5 +462,42 @@ public class VetHorseService {
                 + "WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Blocked' "
                 + "AND ce.status IN ('Scheduled','InProgress') AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')",
                 horse, time.today());
+        blockUpcomingRaceEntries(horse, reasonSummary);
+    }
+
+    /** Chuyển các đăng ký giải đấu chính thức từ hôm nay trở đi sang Blocked khi ngựa bị khóa y tế. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void blockUpcomingRaceEntries(String horse, String reasonSummary) {
+        var affected = data.db.query(
+                "SELECT e.id,r.race_name,r.race_date,h.horse_name,h.owner_id "
+                        + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE e.horse_id=? AND e.status='Registered' AND r.is_simulated=FALSE "
+                        + "AND COALESCE(r.status,'Scheduled')='Scheduled' AND r.race_date>=?",
+                VetRows.MAPPER, horse, time.today());
+        if (affected.isEmpty())
+            return;
+        data.db.update(
+                "UPDATE horse_race_entries SET status='Blocked' "
+                        + "WHERE horse_id=? AND status='Registered' AND race_id IN ("
+                        + "SELECT id FROM races WHERE is_simulated=FALSE AND COALESCE(status,'Scheduled')='Scheduled' AND race_date>=?)",
+                horse, time.today());
+        data.db.update(
+                "UPDATE calendar_events SET status='Blocked' "
+                        + "WHERE status='Scheduled' AND id IN ("
+                        + "SELECT e.calendar_event_id FROM horse_race_entries e JOIN races r ON r.id=e.race_id "
+                        + "WHERE e.horse_id=? AND e.status='Blocked' AND r.is_simulated=FALSE AND r.race_date>=?)",
+                horse, time.today());
+        for (var entry : affected) {
+            String entryId = entry.get("id").toString();
+            String msg = "Cảnh báo y tế: Ngựa " + entry.get("horse_name") + " bị tạm khóa (" + reasonSummary
+                    + "). Đăng ký giải \"" + entry.get("race_name") + "\" ngày " + entry.get("race_date")
+                    + " đã chuyển sang Tạm khóa (Blocked).";
+            for (long trainer : activeRecipients("HEAD_TRAINER"))
+                notifications.schedule(trainer, "Horse_Race_Entries", entryId, msg, time.now());
+            for (long manager : activeRecipients("CLUB_MANAGER"))
+                notifications.schedule(manager, "Horse_Race_Entries", entryId, msg, time.now());
+            if (entry.get("owner_id") instanceof Number ownerId)
+                notifyActiveOwner(ownerId.longValue(), "Horse_Race_Entries", entryId, msg);
+        }
     }
 }

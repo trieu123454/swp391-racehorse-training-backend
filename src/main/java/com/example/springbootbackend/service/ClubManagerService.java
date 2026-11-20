@@ -33,13 +33,17 @@ import java.time.ZoneOffset;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.*;
 
+/** Staff, horse registration, inventory, official races, and reporting for Club Managers. */
 @Service
 public class ClubManagerService {
     private static final List<String> STAFF_ROLES = List.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM");
@@ -57,6 +61,7 @@ public class ClubManagerService {
     private final DailyTaskLogRepository dailyTaskLogRepository;
     private final EmailService emailService;
     private final SmsService smsService;
+    private final CalendarConflictService conflicts;
 
     public ClubManagerService(VetData db, PasswordEncoder passwordEncoder, VetTime time,
                               AuditLogRepository auditLogRepository,
@@ -66,7 +71,8 @@ public class ClubManagerService {
                               CalendarEventRepository calendarEventRepository,
                               DailyTaskLogRepository dailyTaskLogRepository,
                               EmailService emailService,
-                              SmsService smsService) {
+                              SmsService smsService,
+                              CalendarConflictService conflicts) {
         this.db = db;
         this.passwordEncoder = passwordEncoder;
         this.time = time;
@@ -78,6 +84,7 @@ public class ClubManagerService {
         this.dailyTaskLogRepository = dailyTaskLogRepository;
         this.emailService = emailService;
         this.smsService = smsService;
+        this.conflicts = conflicts;
     }
 
     @Transactional
@@ -411,8 +418,14 @@ public class ClubManagerService {
                 + "FROM financial_reports fr JOIN horses h ON h.id=fr.horse_id "
                 + "WHERE h.deleted_at IS NULL AND fr.billing_period>=? AND fr.billing_period<=?",
                 YearMonth.from(start).toString(), YearMonth.from(end).toString()).getFirst();
-        Map<String, Object> competition = db.queryForList("SELECT count(*) FILTER (WHERE e.status='Registered') AS registered,"
-                + "count(*) FILTER (WHERE e.status='Completed') AS completed "
+        Map<String, Object> competition = db.queryForList("SELECT "
+                + "count(*) FILTER (WHERE e.status='Registered') AS registered,"
+                + "count(*) FILTER (WHERE e.status='Blocked') AS blocked,"
+                + "count(*) FILTER (WHERE e.status='Completed') AS completed,"
+                + "count(*) FILTER (WHERE e.status='Cancelled') AS cancelled,"
+                + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position=1) AS wins,"
+                + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position BETWEEN 1 AND 3) AS podiums,"
+                + "COALESCE(SUM(e.prize_amount) FILTER (WHERE e.status='Completed'),0) AS total_prize "
                 + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id JOIN horses h ON h.id=e.horse_id "
                 + "WHERE h.deleted_at IS NULL AND r.race_date>=? AND r.race_date<=? "
                 + "AND r.is_simulated=FALSE", start, end).getFirst();
@@ -427,12 +440,72 @@ public class ClubManagerService {
         return result;
     }
 
+    public Map<String, Object> competitionReport(String managerEmail, LocalDate from, LocalDate to) {
+        requireManager(managerEmail);
+        LocalDate start = from == null ? time.today().minusYears(1) : from;
+        LocalDate end = to == null ? time.today().plusDays(60) : to;
+        validateReportRange(start, end);
+
+        Map<String, Object> summary = db.queryForList("SELECT "
+                        + "count(DISTINCT r.id) FILTER (WHERE COALESCE(r.status,'Scheduled')<>'Cancelled') AS total_races,"
+                        + "count(*) FILTER (WHERE e.status='Registered') AS registered,"
+                        + "count(*) FILTER (WHERE e.status='Blocked') AS blocked,"
+                        + "count(*) FILTER (WHERE e.status='Completed') AS completed,"
+                        + "count(*) FILTER (WHERE e.status='Cancelled') AS cancelled,"
+                        + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position=1) AS wins,"
+                        + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position BETWEEN 1 AND 3) AS podiums,"
+                        + "COALESCE(SUM(e.prize_amount) FILTER (WHERE e.status='Completed'),0) AS total_prize "
+                        + "FROM races r LEFT JOIN horse_race_entries e ON e.race_id=r.id "
+                        + "LEFT JOIN horses h ON h.id=e.horse_id AND h.deleted_at IS NULL "
+                        + "WHERE r.is_simulated=FALSE AND NOT EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id) "
+                        + "AND r.race_date>=? AND r.race_date<=? AND (e.id IS NULL OR h.id IS NOT NULL)",
+                start, end).getFirst();
+
+        var leaderboard = db.query("SELECT h.id AS horse_id,h.horse_name,"
+                        + "count(*) FILTER (WHERE e.status='Completed') AS completed_races,"
+                        + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position=1) AS wins,"
+                        + "count(*) FILTER (WHERE e.status='Completed' AND e.result_position BETWEEN 1 AND 3) AS podiums,"
+                        + "MIN(e.result_position) FILTER (WHERE e.status='Completed') AS best_position,"
+                        + "COALESCE(SUM(e.prize_amount) FILTER (WHERE e.status='Completed'),0) AS total_prize "
+                        + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE h.deleted_at IS NULL AND r.is_simulated=FALSE AND r.race_date>=? AND r.race_date<=? "
+                        + "AND e.status='Completed' "
+                        + "GROUP BY h.id,h.horse_name "
+                        + "ORDER BY wins DESC,podiums DESC,total_prize DESC,best_position ASC,h.horse_name ASC",
+                VetRows.MAPPER, start, end);
+
+        var recentResults = db.query("SELECT e.id AS entry_id,e.horse_id,h.horse_name,e.race_id,r.race_name,r.grade,"
+                        + "r.race_date,r.location,e.result_position,e.prize_amount "
+                        + "FROM horse_race_entries e JOIN races r ON r.id=e.race_id JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE h.deleted_at IS NULL AND r.is_simulated=FALSE AND e.status='Completed' "
+                        + "AND r.race_date>=? AND r.race_date<=? "
+                        + "ORDER BY r.race_date DESC,e.result_position ASC,h.horse_name ASC LIMIT 20",
+                VetRows.MAPPER, start, end);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("from", start);
+        result.put("to", end);
+        result.put("summary", summary);
+        result.put("leaderboard", leaderboard);
+        result.put("recent_results", recentResults);
+        return result;
+    }
+
     public Map<String, Object> officialRaces(String managerEmail) {
         requireManager(managerEmail);
-        var rows = db.query("SELECT r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,r.description "
-                        + "FROM races r WHERE r.is_simulated=FALSE AND NOT EXISTS "
-                        + "(SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id) ORDER BY r.race_date,r.race_name,r.id",
-                VetRows.MAPPER);
+        var rows = db.query("SELECT r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,"
+                        + "r.description,COALESCE(r.status,'Scheduled') AS status,r.cancel_reason,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Registered') AS registered_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Blocked') AS blocked_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Completed') AS completed_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Cancelled') AS cancelled_count,"
+                        + "COALESCE(SUM(e.prize_amount) FILTER (WHERE h.id IS NOT NULL AND e.status='Completed'),0) AS total_prize_amount "
+                        + "FROM races r LEFT JOIN horse_race_entries e ON e.race_id=r.id "
+                        + "LEFT JOIN horses h ON h.id=e.horse_id AND h.deleted_at IS NULL "
+                        + "WHERE r.is_simulated=FALSE AND NOT EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id) "
+                        + "GROUP BY r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,r.description,r.status,r.cancel_reason "
+                        + "ORDER BY CASE WHEN COALESCE(r.status,'Scheduled')='Cancelled' THEN 2 WHEN r.race_date<? THEN 1 ELSE 0 END, r.race_date, r.race_name, r.id",
+                VetRows.MAPPER, time.today());
         return Map.of("data", rows);
     }
 
@@ -443,31 +516,254 @@ public class ClubManagerService {
                 "distance_meters:number", "race_date:date", "location:150", "description:0");
         VetInput.required(fields, "race_name", "race_date");
         String raceName = fields.get("race_name").toString().trim();
-        if (raceName.isEmpty()) throw VetException.invalid("race_name", "Race name is required");
+        if (raceName.isEmpty()) throw VetException.invalid("race_name", "Tên giải đấu không được để trống");
         LocalDate raceDate = (LocalDate) fields.get("race_date");
-        if (raceDate.isBefore(time.today())) throw VetException.invalid("race_date", "Official races must be scheduled for today or later");
-        Integer distance = null;
-        if (fields.get("distance_meters") != null) {
-            BigDecimal value = (BigDecimal) fields.get("distance_meters");
-            try { distance = value.intValueExact(); }
-            catch (ArithmeticException ex) { throw VetException.invalid("distance_meters", "Distance must be a whole number of meters"); }
-            if (distance < 1 || distance > 100000) throw VetException.invalid("distance_meters", "Distance must be between 1 and 100000 meters");
-        }
+        if (raceDate.isBefore(time.today())) throw VetException.invalid("race_date", "Giải đấu chính thức phải có ngày thi đấu từ hôm nay trở đi");
+        Integer distance = parseOptionalDistance(fields.get("distance_meters"));
+        assertNoDuplicateOfficialRace(raceName, raceDate, null);
+
         String id = UUID.randomUUID().toString();
         Race race = new Race();
         race.setId(id);
         race.setRaceName(raceName);
-        race.setGrade(fields.get("grade") == null ? null : fields.get("grade").toString());
-        race.setDistanceCategory(fields.get("distance_category") == null ? null : fields.get("distance_category").toString());
+        race.setGrade(blankToNull(fields.get("grade")));
+        race.setDistanceCategory(blankToNull(fields.get("distance_category")));
         race.setDistanceMeters(distance);
         race.setRaceDate(raceDate);
-        race.setLocation(fields.get("location") == null ? null : fields.get("location").toString());
-        race.setDescription(fields.get("description") == null ? null : fields.get("description").toString());
+        race.setLocation(blankToNull(fields.get("location")));
+        race.setDescription(blankToNull(fields.get("description")));
         race.setSimulated(false);
+        race.setStatus("Scheduled");
         raceRepository.saveAndFlush(race);
         audit(managerId, "CREATE_OFFICIAL_RACE:" + id, ip);
-        return db.query("SELECT id,race_name,grade,distance_category,distance_meters,race_date,location,description "
-                + "FROM races WHERE id=?", VetRows.MAPPER, id).getFirst();
+        notifyActiveUsersByRole("HEAD_TRAINER", "Races", id,
+                "Club Manager vừa tạo giải đấu chính thức mới: \"" + raceName + "\" ngày " + raceDate + ".");
+        return officialRaceSummaryRow(id);
+    }
+
+    @Transactional
+    public Map<String, Object> updateOfficialRace(String managerEmail, String ip, UUID raceId, JsonNode body) {
+        long managerId = requireManager(managerEmail);
+        String id = raceId.toString();
+        var existingRows = db.query(
+                "SELECT r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,r.description,"
+                        + "COALESCE(r.status,'Scheduled') AS status FROM races r WHERE r.id=? AND r.is_simulated=FALSE "
+                        + "AND NOT EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id) FOR UPDATE OF r",
+                VetRows.MAPPER, id);
+        if (existingRows.isEmpty()) throw new VetException(404, "RACE_NOT_FOUND", "Không tìm thấy giải đấu chính thức");
+        var existing = existingRows.getFirst();
+        if ("Cancelled".equals(existing.get("status")))
+            throw new VetException(409, "RACE_CANCELLED", "Không thể chỉnh sửa giải đấu đã hủy");
+
+        var fields = VetInput.parse(body, "race_name:150", "grade:10", "distance_category:20",
+                "distance_meters:number", "race_date:date", "location:150", "description:0");
+        String newName = fields.containsKey("race_name") ? Objects.toString(fields.get("race_name"), "").trim()
+                : existing.get("race_name").toString();
+        if (newName.isEmpty()) throw VetException.invalid("race_name", "Tên giải đấu không được để trống");
+        LocalDate oldDate = (LocalDate) existing.get("race_date");
+        LocalDate newDate = fields.containsKey("race_date") ? (LocalDate) fields.get("race_date") : oldDate;
+        if (newDate == null) throw VetException.invalid("race_date", "Ngày thi đấu bắt buộc");
+        Integer oldDistance = existing.get("distance_meters") instanceof Number n ? n.intValue() : null;
+        Integer newDistance = fields.containsKey("distance_meters") ? parseOptionalDistance(fields.get("distance_meters")) : oldDistance;
+        String newGrade = fields.containsKey("grade") ? blankToNull(fields.get("grade")) : (String) existing.get("grade");
+        String newDistanceCategory = fields.containsKey("distance_category") ? blankToNull(fields.get("distance_category")) : (String) existing.get("distance_category");
+        String newLocation = fields.containsKey("location") ? blankToNull(fields.get("location")) : (String) existing.get("location");
+        String newDescription = fields.containsKey("description") ? blankToNull(fields.get("description")) : (String) existing.get("description");
+
+        boolean nameChanged = !newName.equals(existing.get("race_name").toString());
+        boolean dateChanged = !newDate.equals(oldDate);
+        boolean distanceChanged = !Objects.equals(newDistance, oldDistance);
+
+        Long completedCount = db.queryForObject(
+                "SELECT count(*) FROM horse_race_entries e JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE e.race_id=? AND e.status='Completed' AND h.deleted_at IS NULL",
+                Long.class, id);
+        if (completedCount != null && completedCount > 0 && (nameChanged || dateChanged || distanceChanged)) {
+            throw new VetException(409, "RACE_HAS_COMPLETED_RESULTS",
+                    "Giải đấu đã có kết quả hoàn thành nên không thể thay đổi tên giải, ngày thi đấu hoặc cự ly");
+        }
+        assertNoDuplicateOfficialRace(newName, newDate, id);
+
+        List<Map<String, Object>> activeEntries = db.query(
+                "SELECT e.id,e.horse_id,e.calendar_event_id,h.horse_name,h.owner_id "
+                        + "FROM horse_race_entries e JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE e.race_id=? AND h.deleted_at IS NULL AND e.status IN ('Registered','Blocked') "
+                        + "ORDER BY e.horse_id,e.id",
+                VetRows.MAPPER, id);
+
+        if (dateChanged) {
+            if (newDate.isBefore(time.today()))
+                throw VetException.invalid("race_date", "Ngày thi đấu mới phải từ hôm nay trở đi");
+            Set<String> lockedHorses = new LinkedHashSet<>();
+            for (var entry : activeEntries) lockedHorses.add(entry.get("horse_id").toString());
+            for (String horseId : lockedHorses) {
+                db.queryForList("SELECT id FROM horses WHERE id=? AND deleted_at IS NULL FOR UPDATE", horseId);
+            }
+            List<Map<String, Object>> allConflicts = new ArrayList<>();
+            for (var entry : activeEntries) {
+                var horseConflicts = conflicts.checkCalendarConflicts(
+                        entry.get("horse_id").toString(), newDate, null, null,
+                        entry.get("calendar_event_id").toString(), null, null);
+                for (var conflict : horseConflicts) {
+                    Map<String, Object> item = new LinkedHashMap<>(conflict);
+                    item.put("horse_id", entry.get("horse_id"));
+                    allConflicts.add(item);
+                }
+            }
+            if (!allConflicts.isEmpty()) {
+                throw new VetException(409, "SCHEDULE_CONFLICT",
+                        "Không thể dời giải sang ngày " + newDate + " vì có ngựa đã đăng ký bị trùng lịch",
+                        Map.of("conflicts", allConflicts));
+            }
+            for (var entry : activeEntries) {
+                db.update("UPDATE calendar_events SET event_date=?,title=? WHERE id=?",
+                        newDate, newName, entry.get("calendar_event_id"));
+            }
+        } else if (nameChanged) {
+            db.update("UPDATE calendar_events ce SET title=? FROM horse_race_entries e "
+                            + "WHERE ce.id=e.calendar_event_id AND e.race_id=? AND e.status<>'Cancelled'",
+                    newName, id);
+        }
+
+        db.update("UPDATE races SET race_name=?,grade=?,distance_category=?,distance_meters=?,race_date=?,location=?,description=? WHERE id=?",
+                newName, newGrade, newDistanceCategory, newDistance, newDate, newLocation, newDescription, id);
+        audit(managerId, "UPDATE_OFFICIAL_RACE:" + id, ip);
+
+        if (dateChanged && !activeEntries.isEmpty()) {
+            String msg = "Giải đấu \"" + newName + "\" đã được Club Manager dời từ ngày " + oldDate + " sang ngày " + newDate + ".";
+            notifyActiveUsersByRole("HEAD_TRAINER", "Races", id, msg);
+            Set<Long> ownerIds = new LinkedHashSet<>();
+            for (var entry : activeEntries) {
+                if (entry.get("owner_id") instanceof Number ownerId) ownerIds.add(ownerId.longValue());
+            }
+            for (long ownerId : ownerIds) notifyActiveOwner(ownerId, "Races", id, msg);
+        }
+        return officialRaceSummaryRow(id);
+    }
+
+    @Transactional
+    public Map<String, Object> cancelOfficialRace(String managerEmail, String ip, UUID raceId, JsonNode body) {
+        long managerId = requireManager(managerEmail);
+        var fields = VetInput.parse(body, "reason:255");
+        VetInput.required(fields, "reason");
+        String reason = fields.get("reason").toString();
+
+        String id = raceId.toString();
+        var existingRows = db.query(
+                "SELECT r.id,r.race_name,r.race_date,COALESCE(r.status,'Scheduled') AS status "
+                        + "FROM races r WHERE r.id=? AND r.is_simulated=FALSE "
+                        + "AND NOT EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id) FOR UPDATE OF r",
+                VetRows.MAPPER, id);
+        if (existingRows.isEmpty()) throw new VetException(404, "RACE_NOT_FOUND", "Không tìm thấy giải đấu chính thức");
+        var race = existingRows.getFirst();
+        if ("Cancelled".equals(race.get("status")))
+            throw new VetException(409, "ALREADY_CANCELLED", "Giải đấu đã được hủy trước đó");
+
+        Long completedCount = db.queryForObject(
+                "SELECT count(*) FROM horse_race_entries e JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE e.race_id=? AND e.status='Completed' AND h.deleted_at IS NULL",
+                Long.class, id);
+        if (completedCount != null && completedCount > 0)
+            throw new VetException(409, "RACE_HAS_COMPLETED_RESULTS", "Không thể hủy giải đấu đã có kết quả hoàn thành");
+
+        var activeEntries = db.query(
+                "SELECT e.id,e.horse_id,e.calendar_event_id,h.owner_id "
+                        + "FROM horse_race_entries e JOIN horses h ON h.id=e.horse_id "
+                        + "WHERE e.race_id=? AND h.deleted_at IS NULL AND e.status IN ('Registered','Blocked') "
+                        + "ORDER BY e.horse_id,e.id",
+                VetRows.MAPPER, id);
+        Set<String> lockedHorses = new LinkedHashSet<>();
+        for (var entry : activeEntries) lockedHorses.add(entry.get("horse_id").toString());
+        for (String horseId : lockedHorses) {
+            db.queryForList("SELECT id FROM horses WHERE id=? AND deleted_at IS NULL FOR UPDATE", horseId);
+        }
+
+        db.update("UPDATE races SET status='Cancelled',cancel_reason=? WHERE id=?", reason, id);
+        db.update("UPDATE horse_race_entries SET status='Cancelled',cancel_reason=? WHERE race_id=? AND status IN ('Registered','Blocked')",
+                reason, id);
+        db.update("UPDATE calendar_events ce SET status='Cancelled' FROM horse_race_entries e "
+                + "WHERE ce.id=e.calendar_event_id AND e.race_id=? AND e.status='Cancelled'", id);
+        audit(managerId, "CANCEL_OFFICIAL_RACE:" + id, ip);
+
+        String msg = "Giải đấu \"" + race.get("race_name") + "\" ngày " + race.get("race_date")
+                + " đã bị hủy bởi Club Manager. Lý do: " + reason + ".";
+        notifyActiveUsersByRole("HEAD_TRAINER", "Races", id, msg);
+        Set<Long> ownerIds = new LinkedHashSet<>();
+        for (var entry : activeEntries) {
+            if (entry.get("owner_id") instanceof Number ownerId) ownerIds.add(ownerId.longValue());
+        }
+        for (long ownerId : ownerIds) notifyActiveOwner(ownerId, "Races", id, msg);
+
+        return officialRaceSummaryRow(id);
+    }
+
+    public Map<String, Object> officialRaceEntries(String managerEmail, UUID raceId) {
+        requireManager(managerEmail);
+        String id = raceId.toString();
+        var raceRows = db.query(
+                "SELECT r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,"
+                        + "r.description,COALESCE(r.status,'Scheduled') AS status,r.cancel_reason "
+                        + "FROM races r WHERE r.id=? AND r.is_simulated=FALSE "
+                        + "AND NOT EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.race_id=r.id)",
+                VetRows.MAPPER, id);
+        if (raceRows.isEmpty()) throw new VetException(404, "RACE_NOT_FOUND", "Không tìm thấy giải đấu chính thức");
+
+        var entries = db.query(
+                "SELECT e.id AS entry_id,e.horse_id,h.horse_name,h.current_status,h.readiness_status,"
+                        + "h.is_training_locked,o.full_name AS owner_name,reg.full_name AS registered_by_name,"
+                        + "e.status,e.cancel_reason,e.result_position,e.prize_amount,e.created_at "
+                        + "FROM horse_race_entries e JOIN horses h ON h.id=e.horse_id "
+                        + "LEFT JOIN users o ON o.user_id=h.owner_id LEFT JOIN users reg ON reg.user_id=e.registered_by "
+                        + "WHERE e.race_id=? AND h.deleted_at IS NULL "
+                        + "ORDER BY CASE e.status WHEN 'Registered' THEN 0 WHEN 'Blocked' THEN 1 WHEN 'Completed' THEN 2 ELSE 3 END,"
+                        + "COALESCE(e.result_position, 9999), h.horse_name, e.id",
+                VetRows.MAPPER, id);
+        return Map.of("race", raceRows.getFirst(), "data", entries);
+    }
+
+    private Integer parseOptionalDistance(Object value) {
+        if (value == null) return null;
+        BigDecimal number = (BigDecimal) value;
+        int distance;
+        try { distance = number.intValueExact(); }
+        catch (ArithmeticException ex) { throw VetException.invalid("distance_meters", "Cự ly phải là số nguyên mét"); }
+        if (distance < 1 || distance > 100000) throw VetException.invalid("distance_meters", "Cự ly phải từ 1 đến 100.000 mét");
+        return distance;
+    }
+
+    private void assertNoDuplicateOfficialRace(String raceName, LocalDate raceDate, String excludeRaceId) {
+        String sql = "SELECT count(*) FROM races r WHERE lower(trim(r.race_name))=lower(?) AND r.race_date=? "
+                + "AND r.is_simulated=FALSE AND COALESCE(r.status,'Scheduled')<>'Cancelled'";
+        List<Object> args = new ArrayList<>();
+        args.add(raceName);
+        args.add(raceDate);
+        if (excludeRaceId != null) {
+            sql += " AND r.id<>?";
+            args.add(excludeRaceId);
+        }
+        Long count = db.queryForObject(sql, Long.class, args.toArray());
+        if (count != null && count > 0)
+            throw new VetException(409, "DUPLICATE_RACE", "Đã tồn tại giải đấu cùng tên vào ngày " + raceDate);
+    }
+
+    private Map<String, Object> officialRaceSummaryRow(String id) {
+        return db.query("SELECT r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,"
+                        + "r.description,COALESCE(r.status,'Scheduled') AS status,r.cancel_reason,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Registered') AS registered_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Blocked') AS blocked_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Completed') AS completed_count,"
+                        + "count(e.id) FILTER (WHERE h.id IS NOT NULL AND e.status='Cancelled') AS cancelled_count,"
+                        + "COALESCE(SUM(e.prize_amount) FILTER (WHERE h.id IS NOT NULL AND e.status='Completed'),0) AS total_prize_amount "
+                        + "FROM races r LEFT JOIN horse_race_entries e ON e.race_id=r.id "
+                        + "LEFT JOIN horses h ON h.id=e.horse_id AND h.deleted_at IS NULL "
+                        + "WHERE r.id=? GROUP BY r.id,r.race_name,r.grade,r.distance_category,r.distance_meters,r.race_date,r.location,r.description,r.status,r.cancel_reason",
+                VetRows.MAPPER, id).getFirst();
+    }
+
+    private String blankToNull(Object value) {
+        if (value == null) return null;
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
     }
 
     public Map<String, Object> auditLogs(String managerEmail, LocalDate from, LocalDate to, int page, int limit) {
@@ -769,15 +1065,34 @@ public class ClubManagerService {
     }
 
     private void notifyUser(Long userId, String message) {
+        notifyUser(userId, "users", String.valueOf(userId), message);
+    }
+
+    private void notifyUser(Long userId, String relatedTable, String relatedId, String message) {
         Notification notification = new Notification();
         notification.setId(UUID.randomUUID().toString());
         notification.setUserId(userId);
-        notification.setRelatedTable("users");
-        notification.setRelatedId(String.valueOf(userId));
+        notification.setRelatedTable(relatedTable);
+        notification.setRelatedId(relatedId);
         notification.setMessage(message);
         notification.setRead(false);
         notification.setCreatedAt(time.utcNow());
         notificationRepository.saveAndFlush(notification);
+    }
+
+    private void notifyActiveUsersByRole(String roleName, String relatedTable, String relatedId, String message) {
+        var ids = db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE r.role_name=? AND u.status='APPROVED' AND u.must_change_password=FALSE "
+                + "AND u.deleted_at IS NULL ORDER BY u.user_id", Long.class, roleName);
+        for (long userId : ids) notifyUser(userId, relatedTable, relatedId, message);
+    }
+
+    private void notifyActiveOwner(Long ownerId, String relatedTable, String relatedId, String message) {
+        if (ownerId == null) return;
+        var ids = db.queryForList("SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE u.user_id=? AND r.role_name='HORSE_OWNER' AND u.status='APPROVED' "
+                + "AND u.must_change_password=FALSE AND u.deleted_at IS NULL", Long.class, ownerId);
+        for (long id : ids) notifyUser(id, relatedTable, relatedId, message);
     }
 
     private void audit(long managerId, String action) {

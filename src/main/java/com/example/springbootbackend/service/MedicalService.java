@@ -13,6 +13,7 @@ import com.example.springbootbackend.dto.request.ApiPage;
 import com.example.springbootbackend.exception.VetException;
 import com.fasterxml.jackson.databind.JsonNode;
 
+/** Medical records, health exams, and injury assessments for Veterinarians. */
 @Service
 @Transactional(readOnly = true)
 public class MedicalService {
@@ -21,13 +22,16 @@ public class MedicalService {
     private final VetAudit audit;
     private final VetTime time;
     private final NotificationService notifications;
+    private final VetHorseService vetHorseService;
 
-    public MedicalService(VetData data, VetAccess access, VetAudit audit, VetTime time, NotificationService notifications) {
+    public MedicalService(VetData data, VetAccess access, VetAudit audit, VetTime time,
+            NotificationService notifications, VetHorseService vetHorseService) {
         this.data = data;
         this.access = access;
         this.audit = audit;
         this.time = time;
         this.notifications = notifications;
+        this.vetHorseService = vetHorseService;
     }
 
     @Transactional
@@ -226,6 +230,7 @@ public class MedicalService {
             data.db.update("UPDATE calendar_events ce SET status='Blocked' FROM training_schedules ts "
                     + "WHERE ts.calendar_event_id=ce.id AND ts.horse_id=? AND ts.status='Blocked' "
                     + "AND ce.status='Scheduled' AND ce.event_date>=? AND ts.session_type IN ('Training','TrialRun')", horse, time.today());
+            vetHorseService.blockUpcomingRaceEntries(horse, "Chấn thương: " + fields.get("body_part"));
             if (!Boolean.TRUE.equals(horseRow.get("is_training_locked")) || !"Critical".equals(horseRow.get("lock_level")))
                 notifyTrainingStaff(horse, horseRow.get("horse_name").toString(), fields.get("body_part").toString());
             result.put("training_locked", true);
