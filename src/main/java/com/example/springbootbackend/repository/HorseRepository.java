@@ -37,4 +37,12 @@ public interface HorseRepository extends JpaRepository<Horse, String> {
     boolean existsByMicrochipNumberIgnoreCaseAndIdNot(String microchipNumber, String id);
 
     boolean existsByPassportNumberIgnoreCaseAndIdNot(String passportNumber, String id);
+
+    boolean existsByMicrochipNumberIgnoreCaseAndDeletedAtIsNull(String microchipNumber);
+
+    boolean existsByPassportNumberIgnoreCaseAndDeletedAtIsNull(String passportNumber);
+
+    boolean existsByMicrochipNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(String microchipNumber, String id);
+
+    boolean existsByPassportNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(String passportNumber, String id);
 }

@@ -78,9 +78,13 @@ class HorseControllerTests {
         request.put("currentWeightKg", weight);
         var part = new MockMultipartFile("request", "request.json", "application/json",
                 json.writeValueAsBytes(request));
-        var document = new MockMultipartFile("documents", "ownership.pdf", "application/pdf", "%PDF-1.7".getBytes());
+        var ownershipDoc = new MockMultipartFile("documents", "ownership.pdf", "application/pdf", "%PDF-1.7".getBytes());
+        var healthDoc = new MockMultipartFile("documents", "health.pdf", "application/pdf", "%PDF-1.7".getBytes());
+        var docTypes = new MockMultipartFile("documentTypes", "types.json", "application/json",
+                json.writeValueAsBytes(List.of("OWNERSHIP_PROOF", "HEALTH_DOCUMENT")));
         var result = mvc.perform(multipart("/api/horse-owner/horse-registration-requests")
-                .file(part).file(document).with(user("HORSE_OWNER@test.com").roles("HORSE_OWNER")))
+                .file(part).file(ownershipDoc).file(healthDoc).file(docTypes)
+                .with(user("HORSE_OWNER@test.com").roles("HORSE_OWNER")))
                 .andExpect(status().isCreated()).andReturn();
         return json.readTree(result.getResponse().getContentAsString()).get("id").asText();
     }
@@ -173,6 +177,8 @@ class HorseControllerTests {
         String id = createHorse();
         mvc.perform(get("/api/horses?search=thun&currentStatus=Healthy&isTrainingLocked=false")
                 .with(user("HEAD_TRAINER@test.com"))).andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get("/api/horses?search=thun&currentStatus=Healthy")
+                .with(user("HORSE_OWNER@test.com"))).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1));
         mvc.perform(get("/api/horses?search=thun&currentStatus=Injured").with(user("HEAD_TRAINER@test.com")))
                 .andExpect(jsonPath("$.total").value(0));
         mvc.perform(get("/api/horses?search=%25").with(user("HEAD_TRAINER@test.com")))

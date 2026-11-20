@@ -63,4 +63,28 @@ class HorseStorageTests {
             server.stop(0);
         }
     }
+
+    @Test void registrationImageUploadSkipsAuditDbAndSupportsJfif() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/storage/v1/object/", exchange -> {
+            byte[] response = "{\"Key\":\"uploaded\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var db = mock(VetData.class);
+            var storage = new HorseStorage("http://127.0.0.1:" + server.getAddress().getPort(), "test-secret", "horse-images", db, new ObjectMapper());
+            byte[] jpeg = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1};
+            String path = storage.uploadRegistrationHorseImage(new MockMultipartFile("horseImage", "photo.jfif", "image/jpeg", jpeg), 7L);
+            assertThat(path).matches("horses/[a-f0-9-]{36}\\.jpg");
+            verifyNoInteractions(db);
+            assertThatThrownBy(() -> storage.uploadRegistrationDocument(
+                    new MockMultipartFile("documents", "bad.docx", "application/pdf", "not-a-pdf-bytes!".getBytes(StandardCharsets.UTF_8))))
+                    .hasMessageContaining("PDF");
+        } finally {
+            server.stop(0);
+        }
+    }
 }

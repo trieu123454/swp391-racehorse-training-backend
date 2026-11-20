@@ -5,11 +5,14 @@ import com.example.springbootbackend.dto.request.HorseUpdateRequest;
 import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
 import com.example.springbootbackend.entity.Horse;
+import com.example.springbootbackend.entity.HorseRegistrationRequest;
+import com.example.springbootbackend.entity.Notification;
 import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
 import com.example.springbootbackend.repository.HorseRegistrationRequestRepository;
 import com.example.springbootbackend.repository.HorseRepository;
+import com.example.springbootbackend.repository.NotificationRepository;
 import com.example.springbootbackend.repository.StableBoxRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +34,7 @@ public class HorseService {
     private final AuditLogRepository auditLogRepository;
     private final HorseRepository horseRepository;
     private final HorseRegistrationRequestRepository registrationRequestRepository;
+    private final NotificationRepository notificationRepository;
     private final AppUserRepository userRepository;
     private final StableBoxRepository stableBoxRepository;
     private final TrainingSimulationRecorder simulationRecorder;
@@ -41,6 +45,7 @@ public class HorseService {
             AuditLogRepository auditLogRepository,
             HorseRepository horseRepository,
             HorseRegistrationRequestRepository registrationRequestRepository,
+            NotificationRepository notificationRepository,
             AppUserRepository userRepository,
             StableBoxRepository stableBoxRepository,
             TrainingSimulationRecorder simulationRecorder,
@@ -51,6 +56,7 @@ public class HorseService {
         this.auditLogRepository = auditLogRepository;
         this.horseRepository = horseRepository;
         this.registrationRequestRepository = registrationRequestRepository;
+        this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.stableBoxRepository = stableBoxRepository;
         this.simulationRecorder = simulationRecorder;
@@ -89,9 +95,6 @@ public class HorseService {
             Boolean locked, int page, int size) {
         if (page < 0 || size < 1 || size > 100)
             throw new ResponseStatusException(BAD_REQUEST, "Phân trang không hợp lệ");
-        if (actor.role().equals("HORSE_OWNER")
-                && (search != null || breed != null || status != null || stable != null || locked != null))
-            throw new ResponseStatusException(FORBIDDEN, "Bộ lọc chỉ dành cho quản lý và huấn luyện viên");
         StringBuilder where = new StringBuilder(" WHERE h.deleted_at IS NULL");
         List<Object> args = new ArrayList<>();
         if (actor.role().equals("HORSE_OWNER")) {
@@ -115,10 +118,17 @@ public class HorseService {
             args.add(through);
         }
         if (search != null && !search.isBlank()) {
-            where.append(" AND lower(h.horse_name) LIKE ? ESCAPE '!'");
-            args.add("%"
-                    + search.trim().toLowerCase(Locale.ROOT).replace("!", "!!").replace("%", "!%").replace("_", "!_")
-                    + "%");
+            String pattern = "%"
+                    + escapeLike(search.trim().toLowerCase(Locale.ROOT))
+                    + "%";
+            where.append(" AND (lower(h.horse_name) LIKE ? ESCAPE '!'"
+                    + " OR lower(COALESCE(h.breed,'')) LIKE ? ESCAPE '!'"
+                    + " OR lower(COALESCE(h.microchip_number,'')) LIKE ? ESCAPE '!'"
+                    + " OR lower(COALESCE(h.passport_number,'')) LIKE ? ESCAPE '!')");
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
         }
         if (breed != null) {
             where.append(" AND h.breed=?");
@@ -283,6 +293,7 @@ public class HorseService {
             throw new ResponseStatusException(BAD_REQUEST, "Chuồng cách ly/chấn thương chỉ được điều chuyển bởi bác sĩ thú y");
         String microchip = optionalIdentifier(request.microchipNumber());
         String passport = optionalIdentifier(request.passportNumber());
+        HorseRegistrationService.acquireIdentityLocks(db, microchip, passport);
         validateIdentityAvailable(microchip, passport, id.toString(), id.toString());
         String path = request.imagePath();
         if (path == null)
@@ -365,11 +376,11 @@ public class HorseService {
 
     private void validateIdentityAvailable(String microchip, String passport, String horseId, String requestId) {
         List<String> activeRequests = List.of("PENDING", "NEEDS_INFORMATION", "AWAITING_OWNER_CONSENT");
-        if (microchip != null && (horseRepository.existsByMicrochipNumberIgnoreCaseAndIdNot(microchip, horseId)
+        if (microchip != null && (horseRepository.existsByMicrochipNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(microchip, horseId)
                 || registrationRequestRepository.existsOtherActiveMicrochip("REGISTER", activeRequests,
                         microchip, requestId)))
             throw new ResponseStatusException(CONFLICT, "Số microchip đã được dùng cho một hồ sơ khác");
-        if (passport != null && (horseRepository.existsByPassportNumberIgnoreCaseAndIdNot(passport, horseId)
+        if (passport != null && (horseRepository.existsByPassportNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(passport, horseId)
                 || registrationRequestRepository.existsOtherActivePassport("REGISTER", activeRequests,
                         passport, requestId)))
             throw new ResponseStatusException(CONFLICT, "Số hộ chiếu đã được dùng cho một hồ sơ khác");
@@ -489,9 +500,29 @@ public class HorseService {
         db.update("UPDATE periodic_care_schedules SET calendar_event_id=NULL WHERE horse_id=?", horseId);
         db.update("UPDATE calendar_events SET status='Cancelled' WHERE horse_id=? AND status IN ('Scheduled','InProgress','Blocked')", horseId);
         LocalDateTime deletedAt = time.utcNow();
-        db.update("UPDATE horse_registration_requests SET status='REJECTED', review_note='Hồ sơ ngựa đã bị xóa', reviewed_by=?, reviewed_at=? "
-                + "WHERE approved_horse_id=? AND status IN ('PENDING','NEEDS_INFORMATION','AWAITING_OWNER_CONSENT')",
-                actor.id(), deletedAt, horseId);
+        List<HorseRegistrationRequest> affectedRequests = registrationRequestRepository
+                .findByApprovedHorseIdAndStatusIn(horseId, List.of("PENDING", "NEEDS_INFORMATION", "AWAITING_OWNER_CONSENT"));
+        for (HorseRegistrationRequest req : affectedRequests) {
+            req.setStatus("REJECTED");
+            req.setReviewNote("Hồ sơ ngựa đã bị xóa");
+            req.setReviewedBy(actor.id());
+            req.setReviewedAt(deletedAt);
+            HorseRegistrationService.appendHistoryEntry(req, "REJECTED", actor.id(), "Hồ sơ ngựa đã bị xóa", deletedAt, objectMapper);
+            if (req.getOwnerId() != null) {
+                Notification notification = new Notification();
+                notification.setId(UUID.randomUUID().toString());
+                notification.setUserId(req.getOwnerId());
+                notification.setRelatedTable("horse_registration_requests");
+                notification.setRelatedId(req.getId());
+                notification.setMessage("Yêu cầu liên kết hồ sơ ngựa " + horse.getHorseName() + " đã bị đóng do hồ sơ ngựa đã bị xóa.");
+                notification.setRead(false);
+                notification.setCreatedAt(deletedAt);
+                notificationRepository.save(notification);
+            }
+        }
+        if (!affectedRequests.isEmpty()) {
+            registrationRequestRepository.saveAllAndFlush(affectedRequests);
+        }
         horse.setDeletedAt(deletedAt);
         horseRepository.saveAndFlush(horse);
         audit(actor.id(), "DELETE_HORSE: " + id);

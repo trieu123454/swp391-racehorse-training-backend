@@ -21,8 +21,22 @@ public class HorseRegistrationReviewController {
     }
 
     @GetMapping
-    public List<Map<String, Object>> pending(Principal principal) {
-        return service.pendingRequests(principal.getName());
+    public List<Map<String, Object>> list(Principal principal,
+            @RequestParam(name = "status", required = false) String status) {
+        return service.managerRequests(principal.getName(), status);
+    }
+
+    @GetMapping("/pending-count")
+    public Map<String, Object> pendingCount(Principal principal) {
+        return service.pendingRequestCount(principal.getName());
+    }
+
+    @GetMapping("/{requestId}/documents/{docId}/url")
+    public Map<String, Object> documentUrl(Principal principal,
+            @PathVariable("requestId") String requestId,
+            @PathVariable("docId") String docId,
+            @RequestParam(name = "download", defaultValue = "false") boolean download) {
+        return service.freshDocumentUrlForManager(principal.getName(), requestId, docId, download);
     }
 
     @PatchMapping("/{requestId}")

@@ -11,6 +11,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
@@ -135,5 +136,29 @@ public class HorseController {
     @GetMapping("/{id}/image")
     public Map<String, Object> image(Principal p, @PathVariable("id") UUID id) {
         return storage.signedUrl((String) horses.detail(horses.actor(p.getName(), false), id).get("image_url"));
+    }
+
+    @GetMapping("/{id}/documents/{docId}/url")
+    public Map<String, Object> documentUrl(Principal p,
+                                           @PathVariable("id") UUID id,
+                                           @PathVariable("docId") String docId,
+                                           @RequestParam(name = "download", defaultValue = "false") boolean download) {
+        HorseService.Actor actor = horses.actor(p.getName(), false);
+        if (!Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Không có quyền xem giấy tờ sở hữu");
+        }
+        horses.detail(actor, id);
+        Map<String, Object> document = horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id).stream()
+                .filter(item -> docId.equals(Objects.toString(item.get("id"), "")))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy giấy tờ xác minh"));
+        String path = Objects.toString(document.get("object_path"), null);
+        String filename = download ? Objects.toString(document.get("name"), "giay-to.pdf") : null;
+        Map<String, Object> signed = storage.signedUrlFresh(path, filename);
+        Object url = signed.get("url");
+        if (url == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tệp giấy tờ");
+        }
+        return Map.of("url", url, "expiresIn", signed.getOrDefault("expiresIn", 300));
     }
 }

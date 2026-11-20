@@ -29,6 +29,9 @@ public class StableBox {
     @Column(name = "status", length = 20)
     private String status = "Available";
 
+    @Column(name = "box_type", nullable = false, length = 20)
+    private String boxType = "Normal";
+
     public String getId() {
         return id;
     }
@@ -67,5 +70,13 @@ public class StableBox {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getBoxType() {
+        return boxType;
+    }
+
+    public void setBoxType(String boxType) {
+        this.boxType = boxType;
     }
 }

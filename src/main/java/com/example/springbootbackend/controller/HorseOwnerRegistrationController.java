@@ -49,4 +49,12 @@ public class HorseOwnerRegistrationController {
         return service.resubmit(principal.getName(), requestId, body, horseImage, documents,
                 documentTypes, request.getRemoteAddr());
     }
+
+    @GetMapping("/{requestId}/documents/{docId}/url")
+    public Map<String, Object> documentUrl(Principal principal,
+            @PathVariable("requestId") String requestId,
+            @PathVariable("docId") String docId,
+            @RequestParam(name = "download", defaultValue = "false") boolean download) {
+        return service.freshDocumentUrlForOwner(principal.getName(), requestId, docId, download);
+    }
 }

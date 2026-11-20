@@ -2,6 +2,7 @@ package com.example.springbootbackend.exception;
 
 import com.example.springbootbackend.controller.HorseController;
 import com.example.springbootbackend.controller.HorseOwnerRegistrationController;
+import com.example.springbootbackend.controller.HorseOwnershipConsentController;
 import com.example.springbootbackend.controller.HorseRegistrationReviewController;
 
 import java.util.Map;
@@ -14,7 +15,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
 
-@RestControllerAdvice(assignableTypes = {HorseController.class, HorseOwnerRegistrationController.class, HorseRegistrationReviewController.class})
+@RestControllerAdvice(assignableTypes = {HorseController.class, HorseOwnerRegistrationController.class, HorseRegistrationReviewController.class, HorseOwnershipConsentController.class})
 public class HorseExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<?> business(ResponseStatusException e) {

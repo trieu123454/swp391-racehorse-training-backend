@@ -101,18 +101,28 @@ public class HorseStorage {
 
     public String uploadRegistrationHorseImage(MultipartFile file, long actor) {
         if (file == null || file.isEmpty()) return null;
-        return (String) upload(file, actor, "horses").get("imagePath");
+        return uploadToStorage(file, "horses");
     }
 
     private Map<String, Object> upload(MultipartFile file, long actor, String folder) {
-        if (file.isEmpty()) throw new ResponseStatusException(BAD_REQUEST, "Ảnh không được rỗng");
+        String path = uploadToStorage(file, folder);
+        db.update("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)",
+                UUID.randomUUID().toString(), actor, "UPLOAD_HORSE_IMAGE:" + path, "127.0.0.1", time.utcNow());
+        return Map.of("imagePath", path);
+    }
+
+    private String uploadToStorage(MultipartFile file, String folder) {
+        if (file == null || file.isEmpty()) throw new ResponseStatusException(BAD_REQUEST, "Ảnh không được rỗng");
         if (file.getSize() > 5 * 1024 * 1024) throw new ResponseStatusException(PAYLOAD_TOO_LARGE, "Ảnh không được vượt quá 5 MB");
         try {
             byte[] bytes = file.getBytes();
             String type = detect(bytes);
+            String supplied = Objects.toString(file.getContentType(), "").trim().toLowerCase(Locale.ROOT);
             String name = Objects.toString(file.getOriginalFilename(), "").toLowerCase(Locale.ROOT);
             String extension = switch (type) { case "image/jpeg" -> ".jpg"; case "image/png" -> ".png"; default -> ".webp"; };
-            if (!type.equals(file.getContentType()) || !(name.endsWith(extension) || (extension.equals(".jpg") && name.endsWith(".jpeg"))))
+            boolean validExtension = name.endsWith(extension)
+                    || (".jpg".equals(extension) && (name.endsWith(".jpeg") || name.endsWith(".jfif")));
+            if (!type.equals(supplied) || !validExtension)
                 throw new ResponseStatusException(BAD_REQUEST, "Chỉ chấp nhận ảnh JPG, PNG, WebP đúng định dạng");
             String fileId = UUID.randomUUID().toString();
             boolean privateIncident = "incidents".equals(folder);
@@ -120,9 +130,7 @@ public class HorseStorage {
             String path = isCloudinaryProvider() ? cloudinaryPrefix + "/" + fileId + extension : folder + "/" + fileId + extension;
             if (isCloudinaryProvider()) uploadCloudinary(folder + "/" + fileId, "image", privateIncident ? "authenticated" : "upload", extension, type, bytes);
             else send("/object/" + bucket + "/" + path, type, bytes);
-            db.update("INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES (?,?,?,?,?)",
-                    UUID.randomUUID().toString(), actor, "UPLOAD_HORSE_IMAGE:" + path, "127.0.0.1", time.utcNow());
-            return Map.of("imagePath", path);
+            return path;
         } catch (IOException e) { throw new ResponseStatusException(BAD_REQUEST, "Không đọc được ảnh"); }
     }
 
@@ -137,7 +145,11 @@ public class HorseStorage {
 
     private static String detectDocument(byte[] b) {
         if (b.length >= 5 && new String(b, 0, 5, StandardCharsets.US_ASCII).equals("%PDF-")) return "application/pdf";
-        return detect(b);
+        try {
+            return detect(b);
+        } catch (ResponseStatusException e) {
+            throw new ResponseStatusException(BAD_REQUEST, "Nội dung tệp không phải PDF hoặc ảnh JPG, PNG, WebP");
+        }
     }
 
     public Map<String, Object> signedUrl(String path) {
@@ -152,10 +164,26 @@ public class HorseStorage {
         if (cached != null && nowMs < cached.expiresAtMs()) {
             return cached.payload();
         }
+        Map<String, Object> result = computeSignedUrl(path, downloadFilename);
+        if (Boolean.TRUE.equals(result.get("hasImage"))) {
+            signedUrlCache.put(cacheKey, new CachedUrl(result, System.currentTimeMillis() + 120_000L));
+        }
+        return result;
+    }
+
+    public Map<String, Object> signedUrlFresh(String path, String downloadFilename) {
+        if (path == null) return Map.of("hasImage", false);
+        Map<String, Object> result = computeSignedUrl(path, downloadFilename);
+        if (Boolean.TRUE.equals(result.get("hasImage"))) {
+            String cacheKey = path + "|" + Objects.toString(downloadFilename, "");
+            signedUrlCache.put(cacheKey, new CachedUrl(result, System.currentTimeMillis() + 120_000L));
+        }
+        return result;
+    }
+
+    private Map<String, Object> computeSignedUrl(String path, String downloadFilename) {
         if (isCloudinaryPath(path)) {
-            Map<String, Object> result = cloudinaryUrl(path, downloadFilename);
-            signedUrlCache.put(cacheKey, new CachedUrl(result, nowMs + 240_000L));
-            return result;
+            return cloudinaryUrl(path, downloadFilename);
         }
         if (!path.matches("(horses|incidents)/[0-9a-fA-F-]{36}\\.(jpg|png|webp)|horse-documents/[0-9a-fA-F-]{36}\\.(jpg|png|webp|pdf)"))
             throw new ResponseStatusException(BAD_REQUEST, "Đường dẫn tệp không hợp lệ");
@@ -166,10 +194,53 @@ public class HorseStorage {
             if (!signed.startsWith("/object/sign/")) throw new IllegalArgumentException();
             String signedUrl = url + "/storage/v1" + signed;
             if (downloadFilename != null && !downloadFilename.isBlank()) signedUrl += "&download=" + encode(downloadFilename);
-            Map<String, Object> result = Map.of("hasImage", true, "url", signedUrl, "expiresIn", 300);
-            signedUrlCache.put(cacheKey, new CachedUrl(result, nowMs + 240_000L));
-            return result;
+            return Map.of("hasImage", true, "url", signedUrl, "expiresIn", 300);
         } catch (Exception e) { throw new ResponseStatusException(BAD_GATEWAY, "Không lấy được link ảnh"); }
+    }
+
+    public void deleteQuietly(String path) {
+        if (path == null || path.isBlank()) return;
+        try {
+            if (isCloudinaryPath(path)) {
+                requireCloudinaryConfig();
+                boolean document = path.startsWith("horse-documents/");
+                String fileName = path.substring(path.lastIndexOf('/') + 1);
+                String resourceType = document ? "raw" : "image";
+                String deliveryType = (document || path.startsWith("incidents/cloudinary-private/")) ? "authenticated" : "upload";
+                String publicId = document
+                        ? "horse-documents/" + fileName
+                        : (path.startsWith("incidents/") ? "incidents/" : "horses/") + fileName.substring(0, fileName.lastIndexOf('.'));
+                String timestamp = Long.toString(Instant.now().getEpochSecond());
+                SortedMap<String, String> params = new TreeMap<>();
+                params.put("invalidate", "true");
+                params.put("public_id", publicId);
+                params.put("timestamp", timestamp);
+                params.put("type", deliveryType);
+                String signature = apiSignature(params, cloudApiSecret);
+                params.put("api_key", cloudApiKey);
+                params.put("signature", signature);
+                String credentials = Base64.getEncoder().encodeToString((cloudApiKey + ":" + cloudApiSecret).getBytes(StandardCharsets.UTF_8));
+                URI endpoint = URI.create("https://api.cloudinary.com/v1_1/" + cloudName + "/" + resourceType + "/destroy");
+                HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(15))
+                        .header("Authorization", "Basic " + credentials)
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(encodeQuery(params))).build();
+                client.send(request, HttpResponse.BodyHandlers.discarding());
+                return;
+            }
+            if (!url.isBlank() && !key.isBlank() && bucket.matches("[a-zA-Z0-9_-]+")
+                    && path.matches("(horses|incidents)/[0-9a-fA-F-]{36}\\.(jpg|png|webp)|horse-documents/[0-9a-fA-F-]{36}\\.(jpg|png|webp|pdf)")) {
+                var builder = HttpRequest.newBuilder(URI.create(url + "/storage/v1/object/" + bucket + "/" + path))
+                        .timeout(Duration.ofSeconds(15))
+                        .header("apikey", key);
+                if (key.startsWith("eyJ")) builder.header("Authorization", "Bearer " + key);
+                client.send(builder.DELETE().build(), HttpResponse.BodyHandlers.discarding());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("Không thể dọn tệp lưu trữ tạm ({}): {}", path, e.getMessage());
+        }
     }
 
     private boolean isCloudinaryProvider() {
@@ -257,7 +328,8 @@ public class HorseStorage {
     }
 
     private static void writeFilePart(ByteArrayOutputStream out, String boundary, String extension, String contentType, byte[] bytes) throws IOException {
-        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload." + extension + "\"\r\nContent-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        String normalizedExt = extension.startsWith(".") ? extension : "." + extension;
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload" + normalizedExt + "\"\r\nContent-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(bytes);
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
     }
