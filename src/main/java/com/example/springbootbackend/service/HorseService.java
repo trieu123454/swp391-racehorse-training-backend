@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import static org.springframework.http.HttpStatus.*;
 
+/** Manages horse profiles, stable assignments, and ownership history. */
 @Service
 public class HorseService {
     private final VetData db;
@@ -348,30 +349,6 @@ public class HorseService {
     private String findUserName(Object userIdObj) {
         if (!(userIdObj instanceof Number num)) return null;
         return userRepository.findById(num.longValue()).map(AppUser::getFullName).orElse(null);
-    }
-
-    private void ownershipChange(String horseId, Long previousOwner, Long newOwner, long changedBy, String reason) {
-        Horse horse = horseRepository.findById(horseId).orElse(null);
-        if (horse == null) return;
-        try {
-            List<Map<String, Object>> entries = new ArrayList<>();
-            if (horse.getOwnershipHistoryJson() != null && !horse.getOwnershipHistoryJson().isBlank()) {
-                entries.addAll(objectMapper.readValue(horse.getOwnershipHistoryJson(), new TypeReference<List<Map<String, Object>>>() {}));
-            }
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("id", UUID.randomUUID().toString());
-            entry.put("horse_id", horseId);
-            entry.put("previous_owner_id", previousOwner);
-            entry.put("new_owner_id", newOwner);
-            entry.put("changed_by", changedBy);
-            entry.put("change_reason", reason);
-            entry.put("changed_at", time.utcNow().toString());
-            entries.add(entry);
-            horse.setOwnershipHistoryJson(objectMapper.writeValueAsString(entries));
-            horseRepository.saveAndFlush(horse);
-        } catch (Exception e) {
-            throw new IllegalStateException("Cannot serialize ownership history", e);
-        }
     }
 
     private void validateIdentityAvailable(String microchip, String passport, String horseId, String requestId) {

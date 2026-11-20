@@ -48,7 +48,7 @@ public class CalendarConflictService {
         String overlap = startTime == null || endTime == null
                 ? "TRUE"
                 : "(ce.start_time IS NULL OR ce.end_time IS NULL OR (ce.start_time<? AND ce.end_time>?))";
-        String sql = "SELECT DISTINCT ce.id AS event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,h.horse_name "
+        String sql = "SELECT DISTINCT ce.id AS event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.source_table,ce.source_id,h.horse_name "
                 + "FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id " + personJoin
                 + "WHERE h.deleted_at IS NULL AND ce.event_date=? AND ce.status NOT IN ('Cancelled','Completed','Missed') "
                 + "AND ce.event_type<>'Rest' AND (ce.event_type<>'CareTask' OR (ce.start_time IS NOT NULL AND ce.end_time IS NOT NULL)) "

@@ -173,7 +173,9 @@ public class TrainingSimulationRecorder {
         boolean completed = "Completed".equals(session.get("status"));
         Integer recoveryHr = completed ? alertPolicy.estimateRecoveryHeartRate(
                 (int) number(horse, "base_resting_heart_rate"), maxHr, "Fatigue".equals(session.get("scenario"))) : null;
-        BigDecimal stamina = completed ? decimal(RaceSimulationFormula.clamp(10 - Math.max(0, recoveryHr - number(horse, "base_resting_heart_rate")) / 15, 0, 10), 2) : null;
+        BigDecimal stamina = completed && recoveryHr != null
+                ? decimal(RaceSimulationFormula.clamp(10 - Math.max(0, recoveryHr - number(horse, "base_resting_heart_rate")) / 15, 0, 10), 2)
+                : null;
         int cadence = RaceSimulationFormula.cadence(((Number) session.get("duration_seconds")).intValue());
         boolean alert = !alertPolicy.evaluate(horse, readings, recoveryHr, cadence).isEmpty();
         BigDecimal average = decimal(elapsed == 0 ? 0 : distance / elapsed * 3.6, 2);

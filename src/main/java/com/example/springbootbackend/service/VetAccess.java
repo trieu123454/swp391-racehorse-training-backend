@@ -3,7 +3,6 @@ package com.example.springbootbackend.service;
 import org.springframework.stereotype.Component;
 
 import com.example.springbootbackend.entity.AppUser;
-import com.example.springbootbackend.entity.UserStatus;
 import com.example.springbootbackend.exception.VetException;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.HorseRepository;

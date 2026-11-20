@@ -6,7 +6,9 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.lang.NonNull;
 
+/** Spring Boot entry point for the racehorse training backend. */
 @SpringBootApplication
 public class RacehorseTrainingBackendApplication {
 
@@ -19,7 +21,7 @@ public class RacehorseTrainingBackendApplication {
     static BeanPostProcessor supabasePoolerPortNormalizer() {
         return new BeanPostProcessor() {
             @Override
-            public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+            public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
                 if (bean instanceof HikariDataSource hikari) {
                     String url = hikari.getJdbcUrl();
                     if (url != null && url.contains(".pooler.supabase.com:5432/")) {

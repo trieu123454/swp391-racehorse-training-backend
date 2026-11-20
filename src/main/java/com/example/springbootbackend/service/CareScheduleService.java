@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -351,7 +350,7 @@ public class CareScheduleService {
     @Transactional
     public Map<String, Object> reassign(String email, String ip, String id, JsonNode body) {
         long actor = access.requireRole(email, "VETERINARIAN");
-        var schedule = lockedSchedule(id);
+        lockedSchedule(id);
         var fields = VetInput.parse(body, "assigned_doctor_id:long");
         Long newDoctorId = fields.get("assigned_doctor_id") == null ? null : ((Number) fields.get("assigned_doctor_id")).longValue();
         if (newDoctorId != null) {
