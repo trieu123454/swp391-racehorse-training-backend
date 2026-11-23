@@ -28,6 +28,7 @@ import com.example.springbootbackend.dto.response.MessageResponse;
 import com.example.springbootbackend.dto.response.UserResponse;
 import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
+import com.example.springbootbackend.security.JwtAuthenticationFilter;
 import com.example.springbootbackend.entity.Notification;
 import com.example.springbootbackend.entity.RefreshToken;
 import com.example.springbootbackend.entity.Role;
@@ -152,6 +153,7 @@ public class AuthService {
         }
         user.changePassword(passwordEncoder.encode(request.newPassword()));
         refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+        JwtAuthenticationFilter.invalidateEmail(user.getEmail());
         return createAuthResponse(user);
     }
 
@@ -225,6 +227,7 @@ public class AuthService {
 
         // Thu hồi tất cả refresh token cũ để bảo vệ tài khoản
         refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+        JwtAuthenticationFilter.invalidateEmail(user.getEmail());
 
         // Gửi thông báo email
         emailService.sendPasswordResetSuccess(user.getEmail(), user.getFullName());
@@ -270,7 +273,10 @@ public class AuthService {
     @Transactional
     public void logout(String refreshTokenValue) {
         refreshTokenRepository.findByToken(refreshTokenValue)
-                .ifPresent(token -> refreshTokenRepository.revokeActiveTokensBySessionId(token.getSessionId()));
+                .ifPresent(token -> {
+                    refreshTokenRepository.revokeActiveTokensBySessionId(token.getSessionId());
+                    JwtAuthenticationFilter.invalidateSession(token.getSessionId());
+                });
     }
 
     @Transactional
@@ -293,6 +299,7 @@ public class AuthService {
         ensurePendingStaff(user);
         user.reject(approver);
         refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+        JwtAuthenticationFilter.invalidateEmail(user.getEmail());
         recordReviewAuditAndNotification(approver.getId(), user.getId(), "REJECT_USER: " + user.getId(),
                 "Tài khoản của bạn đã bị từ chối bởi Club Manager.");
         return UserResponse.from(user);

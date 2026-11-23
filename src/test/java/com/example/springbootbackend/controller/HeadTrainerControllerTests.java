@@ -504,7 +504,7 @@ class HeadTrainerControllerTests {
     private JsonNode start(String scheduleId, String horseId, String scenario) throws Exception {
         return result(call(body(post("/api/head-trainer/race-simulations"), request(scheduleId, horseId, scenario))).andExpect(status().isCreated()));
     }
-    private long count(String table) { return db.queryForObject("SELECT count(*) FROM " + table, Long.class); }
+    private long count(String table) { return Objects.requireNonNull(db.queryForObject("SELECT count(*) FROM " + table, Long.class)); }
 
     private String createPlan(String horseId, String stage) throws Exception {
         return result(call(body(post("/api/horses/" + horseId + "/training-plans"), plan(stage)))

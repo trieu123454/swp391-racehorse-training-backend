@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.mock.web.MockMultipartFile;
 import com.example.springbootbackend.service.HorseStorage;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -54,7 +53,8 @@ class HorseControllerTests {
     }
 
     long owner() {
-        return db.queryForObject("SELECT user_id FROM users WHERE email='HORSE_OWNER@test.com'", Long.class);
+        return Objects.requireNonNull(
+                db.queryForObject("SELECT user_id FROM users WHERE email='HORSE_OWNER@test.com'", Long.class));
     }
 
     String body(Long owner) throws Exception {
@@ -128,7 +128,6 @@ class HorseControllerTests {
 
     @Test
     void profileWeightRemainsVisibleWhenTrainingMetricsExist() throws Exception {
-        String createBody = body(owner()).replace("\"stableBoxId\"", "\"currentWeightKg\":500,\"stableBoxId\"");
         String requestId = submitRegistration("Thunder", 500);
         var created = mvc.perform(patch("/api/club-manager/horse-registration-requests/" + requestId)
                 .with(user("CLUB_MANAGER@test.com").roles("CLUB_MANAGER"))

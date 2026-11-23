@@ -32,6 +32,9 @@ public class HorseRegistrationRequest {
     @Column(name = "breed", length = 50)
     private String breed;
 
+    @Column(name = "gender", length = 20)
+    private String gender;
+
     @Column(name = "birth_year")
     private Integer birthYear;
 
@@ -134,6 +137,14 @@ public class HorseRegistrationRequest {
 
     public void setBreed(String breed) {
         this.breed = breed;
+    }
+
+    public String getGender() {
+        return gender;
+    }
+
+    public void setGender(String gender) {
+        this.gender = gender;
     }
 
     public Integer getBirthYear() {

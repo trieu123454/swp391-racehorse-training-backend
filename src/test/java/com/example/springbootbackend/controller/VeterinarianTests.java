@@ -177,6 +177,11 @@ class VeterinarianTests {
         call(body(patch("/api/prescriptions/" + id), Map.of("status", "Completed"))).andExpect(status().isOk()).andExpect(jsonPath("$.end_date").value("2026-09-28"));
         call(body(patch("/api/prescriptions/" + id), Map.of("dosage", "2g"))).andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("PRESCRIPTION_CLOSED"));
         call(body(post("/api/medical-records/" + record + "/prescriptions"), Map.of("drug_name", "Drug", "end_date", "2026-09-27"))).andExpect(status().isBadRequest());
+        String futureId = result(call(body(post("/api/medical-records/" + record + "/prescriptions"),
+                Map.of("drug_name", "FutureDrug", "start_date", "2026-10-05", "end_date", "2026-10-10")))
+                .andExpect(status().isCreated())).get("id").asText();
+        call(body(patch("/api/prescriptions/" + futureId), Map.of("status", "Stopped")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.end_date").value("2026-10-05"));
     }
 
     @Test void dietsEnforceCaseInsensitiveOverlapAndAllowOtherFeeds() throws Exception {

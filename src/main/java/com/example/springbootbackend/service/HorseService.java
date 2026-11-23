@@ -14,12 +14,14 @@ import com.example.springbootbackend.repository.HorseRegistrationRequestReposito
 import com.example.springbootbackend.repository.HorseRepository;
 import com.example.springbootbackend.repository.NotificationRepository;
 import com.example.springbootbackend.repository.StableBoxRepository;
+import com.example.springbootbackend.security.JwtAuthenticationFilter;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.time.LocalDateTime;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,30 @@ import static org.springframework.http.HttpStatus.*;
 /** Manages horse profiles, stable assignments, and ownership history. */
 @Service
 public class HorseService {
+    private static final long LIST_CACHE_TTL_MS = 20_000L;
+    private static final long STABLES_CACHE_TTL_MS = 60_000L;
+
+    private static final class CachedValue<T> {
+        private final T value;
+        private final long expiresAtMs;
+
+        CachedValue(T value, long expiresAtMs) {
+            this.value = value;
+            this.expiresAtMs = expiresAtMs;
+        }
+
+        T value() { return value; }
+        long expiresAtMs() { return expiresAtMs; }
+    }
+
+    private static final ConcurrentHashMap<String, CachedValue<Map<String, Object>>> listCache = new ConcurrentHashMap<>();
+    private static volatile CachedValue<List<Map<String, Object>>> stablesCache;
+
+    public static void invalidateCache() {
+        listCache.clear();
+        stablesCache = null;
+    }
+
     private final VetData db;
     private final VetTime time;
     private final int groomAssignmentWindowDays;
@@ -68,21 +94,29 @@ public class HorseService {
     }
 
     public Actor actor(String email, boolean write) {
-        var rows = db.queryForList("SELECT u.user_id,u.status,u.deleted_at,u.must_change_password,r.role_name "
-                + "FROM users u JOIN roles r ON r.role_id=u.role_id WHERE lower(u.email)=lower(?)", email);
-        if (rows.isEmpty())
-            throw new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt");
-        var user = rows.getFirst();
-        if (!"APPROVED".equals(user.get("status")) || user.get("deleted_at") != null)
-            throw new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt");
-        Actor actor = new Actor(((Number) user.get("user_id")).longValue(), (String) user.get("role_name"));
-        if (Boolean.TRUE.equals(user.get("must_change_password")))
-            throw new ResponseStatusException(FORBIDDEN, "Change password before using business APIs");
+        Actor actor = actorFromSecurityContext(email);
+        if (actor == null) {
+            var rows = db.queryForList("SELECT u.user_id,u.status,u.deleted_at,u.must_change_password,r.role_name "
+                    + "FROM users u JOIN roles r ON r.role_id=u.role_id WHERE lower(u.email)=lower(?)", email);
+            if (rows.isEmpty())
+                throw new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt");
+            var user = rows.getFirst();
+            if (!"APPROVED".equals(user.get("status")) || user.get("deleted_at") != null)
+                throw new ResponseStatusException(FORBIDDEN, "Tài khoản chưa được duyệt");
+            actor = new Actor(((Number) user.get("user_id")).longValue(), (String) user.get("role_name"));
+            if (Boolean.TRUE.equals(user.get("must_change_password")))
+                throw new ResponseStatusException(FORBIDDEN, "Change password before using business APIs");
+        }
         if (write ? !actor.role().equals("CLUB_MANAGER")
                 : !Set.of("CLUB_MANAGER", "HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "HORSE_OWNER")
                         .contains(actor.role()))
             throw new ResponseStatusException(FORBIDDEN, "Không có quyền truy cập");
         return actor;
+    }
+
+    private Actor actorFromSecurityContext(String email) {
+        JwtAuthenticationFilter.VerifiedActor verified = JwtAuthenticationFilter.currentActor(email);
+        return verified == null ? null : new Actor(verified.userId(), verified.role());
     }
 
     public Actor ownerLookupActor(String email) {
@@ -96,6 +130,14 @@ public class HorseService {
             Boolean locked, int page, int size) {
         if (page < 0 || size < 1 || size > 100)
             throw new ResponseStatusException(BAD_REQUEST, "Phân trang không hợp lệ");
+        String cacheKey = actor.role() + "|" + (Set.of("HORSE_OWNER", "GROOM").contains(actor.role()) ? actor.id() : "*")
+                + "|" + Objects.toString(search, "") + "|" + Objects.toString(breed, "") + "|" + Objects.toString(status, "")
+                + "|" + Objects.toString(stable, "") + "|" + Objects.toString(locked, "") + "|" + page + "|" + size;
+        long nowMs = System.currentTimeMillis();
+        CachedValue<Map<String, Object>> cached = listCache.get(cacheKey);
+        if (cached != null && nowMs < cached.expiresAtMs()) {
+            return cached.value();
+        }
         StringBuilder where = new StringBuilder(" WHERE h.deleted_at IS NULL");
         List<Object> args = new ArrayList<>();
         if (actor.role().equals("HORSE_OWNER")) {
@@ -147,25 +189,36 @@ public class HorseService {
             where.append(" AND h.is_training_locked=?");
             args.add(locked);
         }
-        long total = db.queryForObject("SELECT count(*) FROM horses h" + where, Long.class, args.toArray());
-        args.add(size);
-        args.add((long) page * size);
+        List<Object> queryArgs = new ArrayList<>(args);
+        queryArgs.add(size);
+        queryArgs.add((long) page * size);
         String latestMetricWeight = "CASE WHEN h.current_weight_kg IS NOT NULL THEN h.current_weight_kg ELSE (SELECT m.body_weight_kg FROM shared_training_metrics m WHERE m.horse_id=h.id "
                 + "AND m.body_weight_kg IS NOT NULL ORDER BY m.recorded_at DESC,m.id DESC LIMIT 1) END AS latest_metric_weight_kg";
         String columns = actor.role().equals("GROOM")
                 ? "h.id,h.horse_name,h.image_url,h.stable_box_id,h.current_status,h.height_cm,h.current_weight_kg,s.box_code,s.section,"
-                        + latestMetricWeight
-                : "h.*,s.box_code,s.section,u.full_name AS owner_name," + latestMetricWeight;
-        var items = db.queryForList("SELECT " + columns
+                        + latestMetricWeight + ",COUNT(*) OVER() AS _total_count"
+                : "h.*,s.box_code,s.section,u.full_name AS owner_name," + latestMetricWeight + ",COUNT(*) OVER() AS _total_count";
+        var rawItems = db.queryForList("SELECT " + columns
                 + " FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users u ON u.user_id=h.owner_id"
-                + where + " ORDER BY h.created_at DESC,h.id LIMIT ? OFFSET ?", args.toArray());
-        items = items.stream().map(row -> {
+                + where + " ORDER BY h.created_at DESC,h.id LIMIT ? OFFSET ?", queryArgs.toArray());
+        long total;
+        if (!rawItems.isEmpty() && rawItems.getFirst().get("_total_count") instanceof Number n) {
+            total = n.longValue();
+        } else if (page > 0) {
+            total = db.queryForObject("SELECT count(*) FROM horses h" + where, Long.class, args.toArray());
+        } else {
+            total = 0L;
+        }
+        var items = rawItems.stream().map(row -> {
+            row.remove("_total_count");
             Object latestWeight = row.remove("latest_metric_weight_kg");
             if (row.get("current_weight_kg") == null && latestWeight != null)
                 row.put("current_weight_kg", latestWeight);
             return actor.role().equals("GROOM") ? groomHorseSummary(row) : row;
         }).toList();
-        return Map.of("items", items, "data", items, "total", total, "page", page, "size", size, "limit", size);
+        Map<String, Object> result = Map.of("items", items, "data", items, "total", total, "page", page, "size", size, "limit", size);
+        listCache.put(cacheKey, new CachedValue<>(result, System.currentTimeMillis() + LIST_CACHE_TTL_MS));
+        return result;
     }
 
     public Map<String, Object> detail(Actor actor, UUID id) {
@@ -196,7 +249,8 @@ public class HorseService {
         if (actor.role().equals("HORSE_OWNER")
                 && (!(horse.get("owner_id") instanceof Number owner) || owner.longValue() != actor.id()))
             throw new ResponseStatusException(FORBIDDEN, "Ngựa không thuộc sở hữu của bạn");
-        horse.put("stable_box", Map.of("id", horse.get("stable_box_id"), "box_code", horse.get("box_code")));
+        horse.put("stable_box", horse.get("stable_box_id") == null ? null
+                : Map.of("id", horse.get("stable_box_id"), "box_code", Objects.toString(horse.get("box_code"), "")));
         horse.put("owner", horse.get("owner_id") == null ? null
                 : Map.of("id", horse.get("owner_id"), "full_name", horse.get("owner_name")));
         return horse;
@@ -271,31 +325,27 @@ public class HorseService {
                     "Thay đổi chủ sở hữu cần yêu cầu liên kết và sự đồng ý của chủ hiện tại.");
         if (request.birthYear() != null && request.birthYear() > time.today().getYear())
             throw new ResponseStatusException(BAD_REQUEST, "Năm sinh không được ở tương lai");
-        if (request.ownerId() != null) {
-            AppUser owner = userRepository.findById(request.ownerId()).orElse(null);
-            if (owner == null || owner.getStatus() != UserStatus.APPROVED || owner.getDeletedAt() != null
-                    || owner.isMustChangePassword() || owner.getRole() == null
-                    || !"HORSE_OWNER".equals(owner.getRole().getName()))
-                throw new ResponseStatusException(BAD_REQUEST, "Chủ ngựa phải là Horse Owner đã được duyệt");
-        }
-        // Serialize competing admissions to the same stable; never rely on a dropdown
-        // alone.
-        var box = stableBoxRepository.findByIdForUpdate(request.stableBoxId().toString())
-                .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "Chuồng không tồn tại"));
-        long occupied = horseRepository.countByStableBoxIdAndDeletedAtIsNullAndIdNot(
-                request.stableBoxId().toString(), id.toString());
-        if (!"Available".equals(box.getStatus()) || box.getCapacity() == null || occupied >= box.getCapacity())
-            throw new ResponseStatusException(CONFLICT, "Chuồng đã đầy hoặc không khả dụng");
-        // Chuồng cách ly / chấn thương chỉ do bác sĩ thú y điều chuyển qua cập nhật trạng thái sức khỏe.
         boolean alreadyInThisBox = request.stableBoxId().toString().equals(horse.getStableBoxId());
-        String boxType = db.queryForObject("SELECT COALESCE(box_type,'Normal') FROM stable_boxes WHERE id=?",
-                String.class, request.stableBoxId().toString());
-        if (!alreadyInThisBox && !"Normal".equals(boxType))
-            throw new ResponseStatusException(BAD_REQUEST, "Chuồng cách ly/chấn thương chỉ được điều chuyển bởi bác sĩ thú y");
+        if (!alreadyInThisBox) {
+            var box = stableBoxRepository.findByIdForUpdate(request.stableBoxId().toString())
+                    .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "Chuồng không tồn tại"));
+            long occupied = horseRepository.countByStableBoxIdAndDeletedAtIsNullAndIdNot(
+                    request.stableBoxId().toString(), id.toString());
+            if (!"Available".equals(box.getStatus()) || box.getCapacity() == null || occupied >= box.getCapacity())
+                throw new ResponseStatusException(CONFLICT, "Chuồng đã đầy hoặc không khả dụng");
+            String boxType = db.queryForObject("SELECT COALESCE(box_type,'Normal') FROM stable_boxes WHERE id=?",
+                    String.class, request.stableBoxId().toString());
+            if (!"Normal".equals(boxType))
+                throw new ResponseStatusException(BAD_REQUEST, "Chuồng cách ly/chấn thương chỉ được điều chuyển bởi bác sĩ thú y");
+        }
         String microchip = optionalIdentifier(request.microchipNumber());
         String passport = optionalIdentifier(request.passportNumber());
-        HorseRegistrationService.acquireIdentityLocks(db, microchip, passport);
-        validateIdentityAvailable(microchip, passport, id.toString(), id.toString());
+        String checkMicrochip = Objects.equals(microchip, optionalIdentifier(horse.getMicrochipNumber())) ? null : microchip;
+        String checkPassport = Objects.equals(passport, optionalIdentifier(horse.getPassportNumber())) ? null : passport;
+        if (checkMicrochip != null || checkPassport != null) {
+            HorseRegistrationService.acquireIdentityLocks(db, checkMicrochip, checkPassport);
+            validateIdentityAvailable(checkMicrochip, checkPassport, id.toString(), id.toString());
+        }
         String path = request.imagePath();
         if (path == null)
             path = horse.getImageUrl();
@@ -309,6 +359,7 @@ public class HorseService {
         }
         horse.setHorseName(request.horseName().trim());
         horse.setBreed(request.breed());
+        horse.setGender(optionalIdentifier(request.gender()));
         horse.setBirthYear(request.birthYear());
         horse.setHeightCm(request.heightCm());
         horse.setCurrentWeightKg(request.currentWeightKg());
@@ -371,6 +422,7 @@ public class HorseService {
     public Map<String, Object> update(Actor actor, UUID id, HorseUpdateRequest request) {
         String horseName = request.horseName().trim();
         String breed = request.breed();
+        String gender = request.gender();
         Integer birthYear = request.birthYear();
         var heightCm = request.heightCm();
         var currentWeightKg = request.currentWeightKg();
@@ -381,14 +433,21 @@ public class HorseService {
         String stable = request.stableBoxId().toString();
         Long owner = request.ownerId();
         String image = request.imagePath();
-        var merged = new HorseRequest(horseName, breed, birthYear, heightCm, currentWeightKg, father, mother,
+        var merged = new HorseRequest(horseName, breed, gender, birthYear, heightCm, currentWeightKg, father, mother,
                 microchip, passport, image, UUID.fromString(stable), owner, request.confirmOwnerChange());
         return save(actor, id, merged);
     }
 
     public List<Map<String, Object>> stables() {
-        return db.queryForList(
+        long nowMs = System.currentTimeMillis();
+        CachedValue<List<Map<String, Object>>> cached = stablesCache;
+        if (cached != null && nowMs < cached.expiresAtMs()) {
+            return cached.value();
+        }
+        List<Map<String, Object>> rows = db.queryForList(
                 "SELECT s.*, (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) AS occupied FROM stable_boxes s WHERE s.status='Available' AND COALESCE(s.box_type,'Normal')='Normal' AND s.capacity > (SELECT count(*) FROM horses h WHERE h.stable_box_id=s.id AND h.deleted_at IS NULL) ORDER BY s.box_code");
+        stablesCache = new CachedValue<>(rows, nowMs + STABLES_CACHE_TTL_MS);
+        return rows;
     }
 
     public Map<String, Object> owners(String search, int page, int size) {
@@ -512,6 +571,7 @@ public class HorseService {
     }
 
     private void audit(long actorId, String action) {
+        invalidateCache();
         AuditLog log = new AuditLog();
         log.setId(UUID.randomUUID().toString());
         log.setUserId(actorId);

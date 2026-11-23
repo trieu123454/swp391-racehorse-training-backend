@@ -6,6 +6,7 @@ import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.exception.VetException;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.HorseRepository;
+import com.example.springbootbackend.security.JwtAuthenticationFilter;
 
 @Component
 public class VetAccess {
@@ -29,10 +30,19 @@ public class VetAccess {
     }
 
     private long requireUser(String email, String requiredRole) {
-        AppUser user = userRepository.findByEmailIgnoreCase(email)
-                .orElseThrow(() -> new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập"));
+        var verified = JwtAuthenticationFilter.currentActor(email);
+        long userId;
+        String roleName;
+        if (verified != null) {
+            userId = verified.userId();
+            roleName = verified.role();
+        } else {
+            AppUser user = userRepository.findByEmailIgnoreCase(email)
+                    .orElseThrow(() -> new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập"));
+            userId = user.getId();
+            roleName = user.getRole().getName();
+        }
         if (requiredRole != null) {
-            String roleName = user.getRole().getName();
             boolean allowed = requiredRole.equals(roleName);
             // HEAD_VETERINARIAN kế thừa toàn bộ quyền chuyên môn của VETERINARIAN
             if (!allowed && "VETERINARIAN".equals(requiredRole) && "HEAD_VETERINARIAN".equals(roleName)) {
@@ -42,7 +52,7 @@ public class VetAccess {
                 throw new VetException(403, "FORBIDDEN", "Tài khoản không được phép truy cập");
             }
         }
-        return user.getId();
+        return userId;
     }
 
     public void requireHorse(String id, boolean lock) {

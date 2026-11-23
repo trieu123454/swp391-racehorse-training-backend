@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -25,6 +27,42 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final long AUTH_CACHE_TTL_MS = 15_000L;
+    public record VerifiedActor(long userId, String role) {}
+    private record CachedAuth(long userId, String role, long expiresAtMs) {}
+    private static final ConcurrentHashMap<String, CachedAuth> AUTH_CACHE = new ConcurrentHashMap<>();
+
+    public static VerifiedActor currentActor(String email) {
+        if (email == null || email.isBlank()) return null;
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) return null;
+        if (!email.equalsIgnoreCase(auth.getName())) return null;
+        if (!(auth.getDetails() instanceof Long userId)) return null;
+        String role = auth.getAuthorities().stream()
+                .map(a -> a.getAuthority())
+                .filter(a -> a != null && a.startsWith("ROLE_"))
+                .map(a -> a.substring("ROLE_".length()))
+                .findFirst()
+                .orElse(null);
+        return role == null ? null : new VerifiedActor(userId, role);
+    }
+
+    public static void invalidateEmail(String email) {
+        if (email == null || email.isBlank()) return;
+        String prefix = email.toLowerCase(Locale.ROOT) + "|";
+        AUTH_CACHE.keySet().removeIf(k -> k.startsWith(prefix));
+    }
+
+    public static void invalidateSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        String suffix = "|" + sessionId;
+        AUTH_CACHE.keySet().removeIf(k -> k.endsWith(suffix));
+    }
+
+    public static void invalidateAll() {
+        AUTH_CACHE.clear();
+    }
+
     private final JwtService jwtService;
     private final AppUserRepository users;
     private final RefreshTokenRepository refreshTokens;
@@ -43,11 +81,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = authorization.substring(7);
             jwtService.validate(token).ifPresent(claims -> {
                 if (!(claims.get("sub") instanceof String email)) return;
+                if (!(claims.get("sessionId") instanceof String sessionId)) return;
+                String cacheKey = email.toLowerCase(Locale.ROOT) + "|" + sessionId;
+                long nowMs = System.currentTimeMillis();
+                String reqPath = request.getRequestURI();
+                boolean bypassCache = "/api/auth/me".equals(reqPath) || "/api/auth/me".equals(request.getServletPath());
+                CachedAuth cached = bypassCache ? null : AUTH_CACHE.get(cacheKey);
+                if (cached != null && nowMs < cached.expiresAtMs()
+                        && String.valueOf(cached.userId()).equals(String.valueOf(claims.get("userId")))) {
+                    UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                            email, null, List.of(new SimpleGrantedAuthority("ROLE_" + cached.role())));
+                    authentication.setDetails(cached.userId());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    return;
+                }
                 var user = users.findByEmailIgnoreCase(email).orElse(null);
                 if (user == null || user.getDeletedAt() != null
                         || !String.valueOf(user.getId()).equals(String.valueOf(claims.get("userId")))) return;
-                if (!(claims.get("sessionId") instanceof String sessionId)
-                        || !refreshTokens.existsBySessionIdAndRevokedFalseAndExpiresAtAfter(sessionId, LocalDateTime.now())) return;
+                if (!refreshTokens.existsBySessionIdAndRevokedFalseAndExpiresAtAfter(sessionId, LocalDateTime.now())) return;
                 if (user.getStatus() != UserStatus.APPROVED) {
                     if (VetHttpSecurity.applies(request)) {
                         try {
@@ -80,11 +131,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     return;
                 }
                 String role = user.getRole().getName();
+                if (!user.isMustChangePassword()) {
+                    AUTH_CACHE.put(cacheKey, new CachedAuth(user.getId(), role, nowMs + AUTH_CACHE_TTL_MS));
+                }
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         email,
                         null,
                         List.of(new SimpleGrantedAuthority("ROLE_" + role))
                 );
+                authentication.setDetails(user.getId());
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             });
         }

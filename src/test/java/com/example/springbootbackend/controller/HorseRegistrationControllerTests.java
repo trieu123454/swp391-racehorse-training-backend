@@ -29,12 +29,14 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @SpringBootTest(properties = {
         "spring.config.import=",
@@ -281,6 +283,43 @@ class HorseRegistrationControllerTests {
         review(id, "REJECT", null).andExpect(status().isBadRequest());
         review(id, "REJECT", "Không đủ giấy tờ.").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"));
         review(id, "APPROVE", null, "stableBoxId", stableId).andExpect(status().isConflict());
+    }
+
+    @Test
+    void rejectAndListSucceedWhenStoragePathIsBlankOrInvalid() throws Exception {
+        mvc.perform(submit(ownerEmail, "HORSE_OWNER", submission("REGISTER", "Broken Path Horse", "CHIP-801", "PASS-801"),
+                        REGISTER_DOCS)).andExpect(status().isCreated());
+        String requestId = latestRequestId(ownerEmail);
+        String brokenDocPath = "legacy/corrupted-doc.pdf";
+        db.update("UPDATE horse_registration_requests SET horse_image_path='' WHERE id=?", requestId);
+        db.update("UPDATE horse_registration_documents SET object_path=? WHERE request_id=?", brokenDocPath, requestId);
+        entityManager.flush();
+        entityManager.clear();
+
+        when(storage.signedUrl(brokenDocPath))
+                .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đường dẫn tệp không hợp lệ"));
+
+        mvc.perform(get("/api/club-manager/horse-registration-requests?status=PENDING")
+                        .with(user(managerEmail).roles("CLUB_MANAGER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(requestId))
+                .andExpect(jsonPath("$[0].horse_image_url").isEmpty())
+                .andExpect(jsonPath("$[0].documents[0].url").isEmpty());
+
+        review(requestId, "REJECT", "Hồ sơ không hợp lệ.")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"));
+        assertThat(db.queryForObject("SELECT status FROM horse_registration_requests WHERE id=?", String.class, requestId))
+                .isEqualTo("REJECTED");
+
+        mvc.perform(get("/api/club-manager/horse-registration-requests?status=REJECTED")
+                        .with(user(managerEmail).roles("CLUB_MANAGER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(requestId));
+        mvc.perform(get("/api/horse-owner/horse-registration-requests")
+                        .with(user(ownerEmail).roles("HORSE_OWNER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(requestId));
     }
 
     @Test

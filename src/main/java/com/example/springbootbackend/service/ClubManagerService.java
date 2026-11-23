@@ -187,6 +187,8 @@ public class ClubManagerService {
     }
 
     private String requireActiveUserRole(String email) {
+        var verified = com.example.springbootbackend.security.JwtAuthenticationFilter.currentActor(email);
+        if (verified != null) return verified.role();
         List<Map<String, Object>> rows = db.queryForList(
                 "SELECT r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id "
                         + "WHERE lower(u.email)=lower(?) AND u.status='APPROVED' AND u.must_change_password=FALSE AND u.deleted_at IS NULL",
@@ -325,6 +327,7 @@ public class ClubManagerService {
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='LOCKED', updated_at=? WHERE user_id=? AND status='APPROVED'", now, userId);
         revokeActiveRefreshTokens(userId);
+        com.example.springbootbackend.security.JwtAuthenticationFilter.invalidateAll();
         String message = StringUtils.hasText(reason) ? "Tài khoản đã bị khóa. Lý do: " + reason.trim() : "Tài khoản của bạn đã bị khóa.";
         notifyUser(userId, message);
         audit(managerId, "LOCK_USER: " + userId + (StringUtils.hasText(reason) ? " - " + reason.trim() : ""));
@@ -379,6 +382,7 @@ public class ClubManagerService {
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET role_id=?,updated_at=? WHERE user_id=? AND status='APPROVED'", targetRoleId, now, userId);
         revokeActiveRefreshTokens(userId);
+        com.example.springbootbackend.security.JwtAuthenticationFilter.invalidateAll();
         notifyUser(userId, "Vai trò của bạn đã được Club Manager đổi từ " + currentRole + " sang " + normalizedRole + ". Vui lòng đăng nhập lại để áp dụng quyền mới.");
         audit(managerId, "UPDATE_USER_ROLE: " + userId + " " + currentRole + " -> " + normalizedRole);
         return Map.of("id", userId, "previous_role", currentRole, "role_name", normalizedRole);
@@ -394,15 +398,21 @@ public class ClubManagerService {
                 + "WHERE u.status='APPROVED' AND u.deleted_at IS NULL "
                 + "AND r.role_name IN ('HEAD_TRAINER','HEAD_VETERINARIAN','VETERINARIAN','GROOM','CLUB_MANAGER') "
                 + "GROUP BY r.role_name ORDER BY r.role_name");
-        Long scheduledSessions = db.queryForObject("SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
+        Map<String, Object> counts = db.queryForList("SELECT "
+                + "(SELECT count(*) FROM calendar_events ce JOIN horses h ON h.id=ce.horse_id "
                 + "WHERE h.deleted_at IS NULL AND ce.event_type IN ('Training','TrialRun','Rest') "
-                + "AND ce.status IN ('Scheduled','InProgress','Blocked') AND ce.event_date>=? AND ce.event_date<=?", Long.class, start, end);
-        Long totalTasks = db.queryForObject("SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
-                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?", Long.class, start, end);
-        Long completedTasks = db.queryForObject("SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
-                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=? AND t.status='Completed'", Long.class, start, end);
-        Long pendingIncidents = db.queryForObject("SELECT count(*) FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
-                + "WHERE h.deleted_at IS NULL AND i.status IN ('Pending','InProgress','AwaitingClosure')", Long.class);
+                + "AND ce.status IN ('Scheduled','InProgress','Blocked') AND ce.event_date>=? AND ce.event_date<=?) AS scheduled_sessions,"
+                + "(SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
+                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=?) AS total_tasks,"
+                + "(SELECT count(*) FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
+                + "JOIN horses h ON h.id=t.horse_id WHERE h.deleted_at IS NULL AND ce.event_date>=? AND ce.event_date<=? AND t.status='Completed') AS completed_tasks,"
+                + "(SELECT count(*) FROM stable_incidents i JOIN horses h ON h.id=i.horse_id "
+                + "WHERE h.deleted_at IS NULL AND i.status IN ('Pending','InProgress','AwaitingClosure')) AS pending_incidents",
+                start, end, start, end, start, end).getFirst();
+        Long scheduledSessions = ((Number) counts.get("scheduled_sessions")).longValue();
+        Long totalTasks = ((Number) counts.get("total_tasks")).longValue();
+        Long completedTasks = ((Number) counts.get("completed_tasks")).longValue();
+        Long pendingIncidents = ((Number) counts.get("pending_incidents")).longValue();
         Map<String, Object> training = db.queryForList("SELECT count(*) FILTER (WHERE ts.status='Scheduled') AS scheduled,"
                 + "count(*) FILTER (WHERE ts.status='Completed') AS completed,"
                 + "count(*) FILTER (WHERE ts.status='InProgress') AS in_progress,"

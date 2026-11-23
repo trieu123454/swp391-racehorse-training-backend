@@ -157,7 +157,7 @@ public class HorseStorage {
     }
 
     public Map<String, Object> signedUrl(String path, String downloadFilename) {
-        if (path == null) return Map.of("hasImage", false);
+        if (path == null || path.isBlank()) return Map.of("hasImage", false);
         String cacheKey = path + "|" + Objects.toString(downloadFilename, "");
         long nowMs = System.currentTimeMillis();
         CachedUrl cached = signedUrlCache.get(cacheKey);
@@ -166,13 +166,14 @@ public class HorseStorage {
         }
         Map<String, Object> result = computeSignedUrl(path, downloadFilename);
         if (Boolean.TRUE.equals(result.get("hasImage"))) {
-            signedUrlCache.put(cacheKey, new CachedUrl(result, System.currentTimeMillis() + 120_000L));
+            long ttlMs = Integer.valueOf(0).equals(result.get("expiresIn")) ? 3_600_000L : 240_000L;
+            signedUrlCache.put(cacheKey, new CachedUrl(result, System.currentTimeMillis() + ttlMs));
         }
         return result;
     }
 
     public Map<String, Object> signedUrlFresh(String path, String downloadFilename) {
-        if (path == null) return Map.of("hasImage", false);
+        if (path == null || path.isBlank()) return Map.of("hasImage", false);
         Map<String, Object> result = computeSignedUrl(path, downloadFilename);
         if (Boolean.TRUE.equals(result.get("hasImage"))) {
             String cacheKey = path + "|" + Objects.toString(downloadFilename, "");
@@ -267,7 +268,7 @@ public class HorseStorage {
             publicId = category + "/" + fileName.substring(0, fileName.lastIndexOf('.'));
             if (category.equals("incidents") && path.startsWith("incidents/cloudinary-private/"))
                 return cloudinaryDownloadUrl("image", publicId, extension, false);
-            String delivery = "https://res.cloudinary.com/" + cloudName + "/image/upload/" + publicId + "." + extension;
+            String delivery = "https://res.cloudinary.com/" + cloudName + "/image/upload/f_auto,q_auto,w_800,c_limit/" + publicId + "." + extension;
             return Map.of("hasImage", true, "url", delivery, "expiresIn", 0);
         }
 

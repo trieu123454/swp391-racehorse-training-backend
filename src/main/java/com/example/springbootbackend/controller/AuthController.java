@@ -3,8 +3,10 @@ package com.example.springbootbackend.controller;
 import java.security.Principal;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -119,5 +121,11 @@ public class AuthController {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public MessageResponse handleAuthException(AuthException ex) {
         return new MessageResponse(ex.getMessage());
+    }
+
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public MessageResponse handleMalformed(Exception ex) {
+        return new MessageResponse("Dữ liệu yêu cầu không hợp lệ");
     }
 }

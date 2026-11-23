@@ -274,6 +274,21 @@ class ClubManagerControllerTests {
                 .andExpect(jsonPath("$.leaderboard[0].total_prize").value(12000000));
     }
 
+    @Test
+    void malformedPathAndUnauthorizedRoleReturn400And403InsteadOf500() throws Exception {
+        mvc.perform(patch("/api/club-manager/groom-tasks/not-a-uuid")
+                        .with(user("manager@test.com").roles("CLUB_MANAGER"))
+                        .contentType(APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("action", "Cancel"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").exists());
+
+        mvc.perform(get("/api/club-manager/users")
+                        .with(user("groom@test.com").roles("GROOM")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").exists());
+    }
+
     private void createUser(String name, String email, String role, String status) {
         Integer roleId = db.queryForObject("SELECT role_id FROM roles WHERE role_name=?", Integer.class, role);
         db.update("INSERT INTO users(full_name,email,password_hash,role_id,status) VALUES (?,?,?, ?,?)",

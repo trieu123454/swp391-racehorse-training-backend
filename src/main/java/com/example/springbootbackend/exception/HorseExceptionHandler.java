@@ -1,21 +1,27 @@
 package com.example.springbootbackend.exception;
 
 import com.example.springbootbackend.controller.HorseController;
+import com.example.springbootbackend.controller.HorseOwnerController;
 import com.example.springbootbackend.controller.HorseOwnerRegistrationController;
 import com.example.springbootbackend.controller.HorseOwnershipConsentController;
 import com.example.springbootbackend.controller.HorseRegistrationReviewController;
+import com.example.springbootbackend.controller.StableIncidentImageController;
 
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.*;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.server.ResponseStatusException;
 
-@RestControllerAdvice(assignableTypes = {HorseController.class, HorseOwnerRegistrationController.class, HorseRegistrationReviewController.class, HorseOwnershipConsentController.class})
+@RestControllerAdvice(assignableTypes = {HorseController.class, HorseOwnerController.class, HorseOwnerRegistrationController.class, HorseRegistrationReviewController.class, HorseOwnershipConsentController.class, StableIncidentImageController.class})
 public class HorseExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<?> business(ResponseStatusException e) {
@@ -42,5 +48,15 @@ public class HorseExceptionHandler {
                 ? "Tệp tải lên vượt giới hạn: ảnh ngựa tối đa 5 MB, mỗi giấy tờ tối đa 10 MB, toàn bộ yêu cầu tối đa 60 MB."
                 : "Ảnh không được vượt quá 5 MB";
         return ResponseEntity.status(413).body(Map.of("message", message));
+    }
+
+    @ExceptionHandler({
+            MethodArgumentTypeMismatchException.class,
+            HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class,
+            MissingServletRequestPartException.class
+    })
+    ResponseEntity<?> malformed(Exception e) {
+        return ResponseEntity.badRequest().body(Map.of("message", "Dữ liệu hoặc tham số yêu cầu không hợp lệ"));
     }
 }

@@ -115,9 +115,11 @@ public class MedicalService {
         VetInput.required(merged, "drug_name", "start_date");
         VetInput.choice(merged, "status", "Active", "Completed", "Stopped");
         if (!"Active".equals(merged.get("status"))) {
-            if (merged.get("end_date") == null || ((LocalDate) merged.get("end_date")).isAfter(time.today())) {
-                patch.put("end_date", time.today());
-                merged.put("end_date", time.today());
+            LocalDate start = (LocalDate) merged.get("start_date");
+            LocalDate closeDate = start != null && start.isAfter(time.today()) ? start : time.today();
+            if (merged.get("end_date") == null || ((LocalDate) merged.get("end_date")).isAfter(closeDate)) {
+                patch.put("end_date", closeDate);
+                merged.put("end_date", closeDate);
             }
         }
         VetInput.dates(merged, "start_date", "end_date");

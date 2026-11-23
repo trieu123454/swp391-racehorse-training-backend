@@ -36,6 +36,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +49,7 @@ import static org.springframework.http.HttpStatus.*;
 
 @Service
 public class HorseRegistrationService {
+    private static final Logger log = LoggerFactory.getLogger(HorseRegistrationService.class);
     private static final List<String> ACTIVE_REQUEST_STATUSES =
             List.of("PENDING", "NEEDS_INFORMATION", "AWAITING_OWNER_CONSENT");
     private static final Set<String> DOCUMENT_TYPES =
@@ -57,6 +60,7 @@ public class HorseRegistrationService {
             Map.entry("requestType", "Loại yêu cầu"),
             Map.entry("horseName", "Tên ngựa"),
             Map.entry("breed", "Giống"),
+            Map.entry("gender", "Giới tính"),
             Map.entry("birthYear", "Năm sinh"),
             Map.entry("heightCm", "Chiều cao (cm)"),
             Map.entry("currentWeightKg", "Cân nặng (kg)"),
@@ -153,7 +157,7 @@ public class HorseRegistrationService {
             uploadedPaths.forEach(storage::deleteQuietly);
             throw exception;
         }
-        return ownerRequestSafe(saved, true);
+        return ownerRequest(saved, true);
     }
 
     public Map<String, Object> resubmit(String email, String requestId, JsonNode body,
@@ -242,14 +246,14 @@ public class HorseRegistrationService {
             throw exception;
         }
         removedStoragePaths.forEach(storage::deleteQuietly);
-        return ownerRequestSafe(saved, true);
+        return ownerRequest(saved, true);
     }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> ownerRequests(String email) {
         AppUser owner = requireUser(email, "HORSE_OWNER");
         List<HorseRegistrationRequest> requests = requestRepository.findByOwnerIdOrderByCreatedAtDescIdDesc(owner.getId());
-        return attachDocumentsAndHistoryBatch(requests, Map.of(), true, false);
+        return attachDocumentsAndHistoryBatch(requests, Map.of(), true);
     }
 
     @Transactional(readOnly = true)
@@ -272,7 +276,7 @@ public class HorseRegistrationService {
             throw new ResponseStatusException(BAD_REQUEST, "Trạng thái lọc yêu cầu không hợp lệ");
         }
         Map<Long, AppUser> owners = usersById(requests.stream().map(HorseRegistrationRequest::getOwnerId).toList());
-        return attachDocumentsAndHistoryBatch(requests, owners, true, false);
+        return attachDocumentsAndHistoryBatch(requests, owners, true);
     }
 
     @Transactional(readOnly = true)
@@ -407,6 +411,7 @@ public class HorseRegistrationService {
         request.setReviewedAt(time.utcNow());
         request.setReviewNote(note);
         requestRepository.saveAndFlush(request);
+        HorseService.invalidateCache();
         recordHistory(request, "REVIEW_APPROVED", manager.getId(), note);
         notifyUser(owner.getId(), request.getId(), "Yêu cầu hồ sơ ngựa " + request.getHorseName() + " đã được duyệt.");
         audit(manager.getId(), "APPROVE_HORSE_REGISTRATION: " + id + " -> " + horseId, ip);
@@ -489,6 +494,7 @@ public class HorseRegistrationService {
             notifyManagers(request.getId(), "Chủ sở hữu hiện tại đã từ chối chuyển quyền ngựa " + horse.getHorseName() + ".");
         }
         requestRepository.saveAndFlush(request);
+        HorseService.invalidateCache();
         recordHistory(request, "CONSENT".equals(action) ? "OWNER_CONSENT" : "OWNER_DECLINED", currentOwner.getId(), note);
         audit(currentOwner.getId(), action + "_HORSE_OWNERSHIP_TRANSFER: " + request.getId(), ip);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -505,6 +511,7 @@ public class HorseRegistrationService {
         horse.setId(UUID.randomUUID().toString());
         horse.setHorseName(request.getHorseName());
         horse.setBreed(request.getBreed());
+        horse.setGender(request.getGender());
         horse.setBirthYear(request.getBirthYear());
         horse.setHeightCm(request.getHeightCm());
         horse.setCurrentWeightKg(request.getCurrentWeightKg());
@@ -725,6 +732,7 @@ public class HorseRegistrationService {
     private static boolean hasSubmissionChanged(HorseRegistrationRequest request, Submission submission) {
         return !Objects.equals(normalizeIdentifier(request.getHorseName()), submission.horseName())
                 || !Objects.equals(normalizeIdentifier(request.getBreed()), submission.breed())
+                || !Objects.equals(normalizeIdentifier(request.getGender()), submission.gender())
                 || !Objects.equals(request.getBirthYear(), submission.birthYear())
                 || !sameDecimal(request.getHeightCm(), submission.heightCm())
                 || !sameDecimal(request.getCurrentWeightKg(), submission.currentWeightKg())
@@ -792,8 +800,7 @@ public class HorseRegistrationService {
     private List<Map<String, Object>> attachDocumentsAndHistoryBatch(
             List<HorseRegistrationRequest> requests,
             Map<Long, AppUser> owners,
-            boolean includeHistory,
-            boolean ignoreSigningErrors) {
+            boolean includeHistory) {
         if (requests.isEmpty()) return List.of();
         List<String> requestIds = requests.stream().map(HorseRegistrationRequest::getId).toList();
         Map<String, List<HorseRegistrationDocument>> docsByRequest = new HashMap<>();
@@ -802,20 +809,13 @@ public class HorseRegistrationService {
         }
         List<String> allPaths = new ArrayList<>();
         for (HorseRegistrationRequest req : requests) {
-            if (req.getHorseImagePath() != null) allPaths.add(req.getHorseImagePath());
+            if (StringUtils.hasText(req.getHorseImagePath())) allPaths.add(req.getHorseImagePath());
             for (HorseRegistrationDocument doc : docsByRequest.getOrDefault(req.getId(), List.of())) {
                 allPaths.add(doc.getObjectPath());
             }
         }
         List<String> signedUrls = parallelMap(allPaths,
-                path -> {
-                    try {
-                        return Objects.toString(storage.signedUrl(Objects.toString(path, "")).get("url"), null);
-                    } catch (RuntimeException exception) {
-                        if (ignoreSigningErrors) return null;
-                        throw exception;
-                    }
-                },
+                this::safeSignedUrl,
                 "Không tạo được liên kết giấy tờ xác minh");
         int cursor = 0;
         List<Map<String, Object>> result = new ArrayList<>(requests.size());
@@ -827,7 +827,7 @@ public class HorseRegistrationService {
                 row.put("owner_email", owner.getEmail());
                 row.put("owner_phone", owner.getPhone());
             }
-            row.put("horse_image_url", req.getHorseImagePath() == null ? null : signedUrls.get(cursor++));
+            row.put("horse_image_url", StringUtils.hasText(req.getHorseImagePath()) ? signedUrls.get(cursor++) : null);
             List<Map<String, Object>> docMaps = new ArrayList<>();
             for (HorseRegistrationDocument doc : docsByRequest.getOrDefault(req.getId(), List.of())) {
                 Map<String, Object> item = new LinkedHashMap<>();
@@ -849,6 +849,17 @@ public class HorseRegistrationService {
         return result;
     }
 
+    private String safeSignedUrl(String path) {
+        if (!StringUtils.hasText(path)) return null;
+        try {
+            Object url = storage.signedUrl(path).get("url");
+            return url == null ? null : url.toString();
+        } catch (RuntimeException exception) {
+            log.warn("Bỏ qua ký URL cho tệp hồ sơ ngựa ({}): {}", path, exception.getMessage());
+            return null;
+        }
+    }
+
     private static List<Map<String, Object>> parseHistoryList(String historyJson, ObjectMapper mapper) {
         if (historyJson == null || historyJson.isBlank()) return List.of();
         try {
@@ -859,11 +870,7 @@ public class HorseRegistrationService {
     }
 
     private Map<String, Object> ownerRequest(HorseRegistrationRequest request, boolean includeHistory) {
-        return attachDocumentsAndHistoryBatch(List.of(request), Map.of(), includeHistory, false).getFirst();
-    }
-
-    private Map<String, Object> ownerRequestSafe(HorseRegistrationRequest request, boolean includeHistory) {
-        return attachDocumentsAndHistoryBatch(List.of(request), Map.of(), includeHistory, true).getFirst();
+        return attachDocumentsAndHistoryBatch(List.of(request), Map.of(), includeHistory).getFirst();
     }
 
     private Map<String, Object> requestMap(HorseRegistrationRequest request) {
@@ -873,6 +880,7 @@ public class HorseRegistrationService {
         row.put("request_type", request.getRequestType());
         row.put("horse_name", request.getHorseName());
         row.put("breed", request.getBreed());
+        row.put("gender", request.getGender());
         row.put("birth_year", request.getBirthYear());
         row.put("height_cm", request.getHeightCm());
         row.put("current_weight_kg", request.getCurrentWeightKg());
@@ -932,6 +940,7 @@ public class HorseRegistrationService {
         snapshot.put("requestType", request.getRequestType());
         snapshot.put("horseName", request.getHorseName());
         snapshot.put("breed", request.getBreed());
+        snapshot.put("gender", request.getGender());
         snapshot.put("birthYear", request.getBirthYear());
         snapshot.put("heightCm", request.getHeightCm());
         snapshot.put("currentWeightKg", request.getCurrentWeightKg());
@@ -953,6 +962,7 @@ public class HorseRegistrationService {
     private void applySubmission(HorseRegistrationRequest request, Submission submission) {
         request.setHorseName(submission.horseName());
         request.setBreed(submission.breed());
+        request.setGender(submission.gender());
         request.setBirthYear(submission.birthYear());
         request.setHeightCm(submission.heightCm());
         request.setCurrentWeightKg(submission.currentWeightKg());
@@ -980,7 +990,8 @@ public class HorseRegistrationService {
             throw new ResponseStatusException(BAD_REQUEST, "Năm sinh không hợp lệ");
         BigDecimal height = optionalDecimal(body, "heightCm", new BigDecimal("50"), new BigDecimal("250"), 1);
         BigDecimal weight = optionalDecimal(body, "currentWeightKg", new BigDecimal("100"), new BigDecimal("900"), 2);
-        return new Submission(requestType, horseName, optionalText(body, "breed", 50), birthYear,
+        return new Submission(requestType, horseName, optionalText(body, "breed", 50),
+                optionalText(body, "gender", 20), birthYear,
                 height, weight, optionalText(body, "pedigreeFather", 100),
                 optionalText(body, "pedigreeMother", 100), optionalText(body, "microchipNumber", 100),
                 optionalText(body, "passportNumber", 100), optionalText(body, "ownerNote", 1000));
@@ -1116,7 +1127,7 @@ public class HorseRegistrationService {
         }
     }
 
-    private record Submission(String requestType, String horseName, String breed, Integer birthYear,
+    private record Submission(String requestType, String horseName, String breed, String gender, Integer birthYear,
             BigDecimal heightCm, BigDecimal currentWeightKg, String pedigreeFather, String pedigreeMother,
             String microchipNumber, String passportNumber, String ownerNote) {}
 }

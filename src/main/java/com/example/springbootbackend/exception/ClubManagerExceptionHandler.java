@@ -5,9 +5,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
@@ -27,6 +31,12 @@ public class ClubManagerExceptionHandler {
                 .body(Map.of("message", exception.getReason() == null ? "Yêu cầu không hợp lệ" : exception.getReason()));
     }
 
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<Map<String, String>> forbidden(AccessDeniedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("message", "Không có quyền truy cập"));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<Map<String, String>> validation(MethodArgumentNotValidException exception) {
         String message = exception.getBindingResult().getFieldErrors().stream()
@@ -34,6 +44,16 @@ public class ClubManagerExceptionHandler {
                 .findFirst()
                 .orElse("Dữ liệu không hợp lệ");
         return ResponseEntity.badRequest().body(Map.of("message", message));
+    }
+
+    @ExceptionHandler({
+            MethodArgumentTypeMismatchException.class,
+            HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class,
+            IllegalArgumentException.class
+    })
+    ResponseEntity<Map<String, String>> malformed(Exception exception) {
+        return ResponseEntity.badRequest().body(Map.of("message", "Dữ liệu hoặc tham số yêu cầu không hợp lệ"));
     }
 
     @ExceptionHandler(Exception.class)

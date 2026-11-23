@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -86,5 +87,20 @@ class HorseStorageTests {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test void blankPathsReturnNoImageWhileInvalidNonBlankPathStillRejected() {
+        var db = mock(VetData.class);
+        var storage = new HorseStorage("http://127.0.0.1:1", "test-secret", "horse-images", db, new ObjectMapper());
+        assertThat(storage.signedUrl(null)).containsEntry("hasImage", false);
+        assertThat(storage.signedUrl("")).containsEntry("hasImage", false);
+        assertThat(storage.signedUrl("   ")).containsEntry("hasImage", false);
+        assertThat(storage.signedUrlFresh(" ", null)).containsEntry("hasImage", false);
+        assertThatThrownBy(() -> storage.signedUrl("../etc/passwd"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Đường dẫn tệp không hợp lệ");
+        assertThatThrownBy(() -> storage.signedUrlFresh("../etc/passwd", null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Đường dẫn tệp không hợp lệ");
     }
 }

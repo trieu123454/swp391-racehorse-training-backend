@@ -38,14 +38,14 @@ public class HorseController {
         int actualPage = page < 1 ? 0 : page - 1;
         int actualSize = limit == null ? size : limit;
         Map<String, Object> res = horses.list(horses.actor(principal.getName(), false), search, breed, currentStatus != null ? currentStatus : status, stable, locked, actualPage, actualSize);
-        if (res.get("items") instanceof List<?> listItems) {
-            for (Object obj : listItems) {
+        if (res.get("items") instanceof List<?> listItems && !listItems.isEmpty()) {
+            listItems.parallelStream().forEach(obj -> {
                 if (obj instanceof Map<?, ?> rawMap) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> row = (Map<String, Object>) rawMap;
                     attachSignedImageUrl(row);
                 }
-            }
+            });
         }
         return res;
     }
@@ -70,17 +70,29 @@ public class HorseController {
         Map<String, Object> horse = horses.detail(actor, id);
         attachSignedImageUrl(horse);
         if (Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
-            List<Map<String, Object>> documents = new ArrayList<>();
-            for (Map<String, Object> document : horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id)) {
+            List<Map<String, Object>> rawDocs = horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id);
+            List<Map<String, Object>> documents = rawDocs.parallelStream().map(document -> {
                 Map<String, Object> item = new LinkedHashMap<>(document);
                 String path = Objects.toString(item.remove("object_path"), null);
-                Map<String, Object> signed = storage.signedUrl(path);
-                Map<String, Object> download = storage.signedUrl(path, Objects.toString(item.get("name"), "giay-to.pdf"));
-                item.put("url", signed.get("url"));
-                item.put("download_url", download.get("url"));
-                item.put("expires_in", signed.get("expiresIn"));
-                documents.add(item);
-            }
+                String url = null;
+                String downloadUrl = null;
+                Object expiresIn = null;
+                if (path != null && !path.isBlank()) {
+                    try {
+                        Map<String, Object> signed = storage.signedUrl(path);
+                        Map<String, Object> download = storage.signedUrl(path, Objects.toString(item.get("name"), "giay-to.pdf"));
+                        url = signed.get("url") instanceof String s && !s.isBlank() ? s : null;
+                        downloadUrl = download.get("url") instanceof String s && !s.isBlank() ? s : null;
+                        expiresIn = signed.get("expiresIn");
+                    } catch (RuntimeException ignored) {
+                        // Keep non-blocking if storage signing fails for a legacy or broken document path
+                    }
+                }
+                item.put("url", url);
+                item.put("download_url", downloadUrl);
+                item.put("expires_in", expiresIn);
+                return item;
+            }).toList();
             horse.put("registration_documents", documents);
         }
         return horse;
@@ -99,7 +111,9 @@ public class HorseController {
 
     @PutMapping("/{id}")
     public Map<String, Object> update(Principal p, @PathVariable("id") UUID id, @Valid @RequestBody HorseUpdateRequest r) {
-        return horses.update(horses.actor(p.getName(), true), id, r);
+        Map<String, Object> updated = horses.update(horses.actor(p.getName(), true), id, r);
+        attachSignedImageUrl(updated);
+        return updated;
     }
 
     @GetMapping("/options/stables")
