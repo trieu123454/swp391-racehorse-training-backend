@@ -379,6 +379,20 @@ public class HeadTrainerService {
                     || (merged.get("end_date") != null && date.isAfter((LocalDate) merged.get("end_date"))))
                 throw new VetException(409, "PLAN_DATES_EXCLUDE_SESSION", "Khoang ngay moi khong bao gom lich tap da gan");
         }
+        Map<String, Object> oldChanged = new LinkedHashMap<>();
+        Map<String, Object> newChanged = new LinkedHashMap<>();
+        Map<String, Object> assignments = new LinkedHashMap<>();
+        for (String field : PLAN_FIELDS) {
+            if (!patch.containsKey(field)) continue;
+            Object oldValue = current.get(field);
+            Object newValue = patch.get(field);
+            if (!Objects.equals(normalize(oldValue), normalize(newValue))) {
+                oldChanged.put(field, oldValue);
+                newChanged.put(field, newValue);
+                assignments.put(field, newValue);
+            }
+        }
+        if (assignments.isEmpty()) return planDetail(id);
         LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
         LocalDateTime nearest = db.query("SELECT min(ce.event_date+COALESCE(ce.start_time,TIME '00:00'))"
                         + " FROM training_schedules ts JOIN calendar_events ce ON ce.id=ts.calendar_event_id"
@@ -400,20 +414,6 @@ public class HeadTrainerService {
                                 + " gio, can sua truoc it nhat " + deadline + " gio", details);
             }
         }
-        Map<String, Object> oldChanged = new LinkedHashMap<>();
-        Map<String, Object> newChanged = new LinkedHashMap<>();
-        Map<String, Object> assignments = new LinkedHashMap<>();
-        for (String field : PLAN_FIELDS) {
-            if (!patch.containsKey(field)) continue;
-            Object oldValue = current.get(field);
-            Object newValue = patch.get(field);
-            if (!Objects.equals(normalize(oldValue), normalize(newValue))) {
-                oldChanged.put(field, oldValue);
-                newChanged.put(field, newValue);
-                assignments.put(field, newValue);
-            }
-        }
-        if (assignments.isEmpty()) return planDetail(id);
         assignments.put("updated_at", time.utcNow());
         List<Object> args = new ArrayList<>();
         assignments.forEach((key, value) -> args.add(VetRows.sqlValue(value)));
