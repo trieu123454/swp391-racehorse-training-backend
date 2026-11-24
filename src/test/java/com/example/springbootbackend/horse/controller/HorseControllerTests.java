@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.assertj.core.api.Assertions.*;
 
-@SpringBootTest(properties={"spring.config.import=","spring.datasource.url=jdbc:h2:mem:horses_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
+@SpringBootTest(properties={"spring.config.import=","spring.datasource.driver-class-name=org.h2.Driver","spring.datasource.username=sa","spring.datasource.password=","spring.datasource.url=jdbc:h2:mem:horses_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Transactional
@@ -39,6 +39,18 @@ class HorseControllerTests {
             .andExpect(status().isCreated()).andExpect(jsonPath("$.current_status").value("Healthy")).andExpect(jsonPath("$.is_training_locked").value(false)).andReturn();
         return json.readTree(result.getResponse().getContentAsString()).get("id").asText();
     }
+    @Test void ownershipHistoryReturnsArrayAndChecksCurrentOwnership() throws Exception {
+        String id=createHorse(),path="/api/horses/"+id+"/ownership-history";
+        mvc.perform(get(path).with(user("CLUB_MANAGER@test.com"))).andExpect(status().isOk()).andExpect(jsonPath("$").isArray()).andExpect(jsonPath("$").isEmpty());
+        db.update("INSERT INTO horse_ownership_history(id,horse_id,new_owner_id,change_reason) VALUES (?,?,?,'REGISTER')",UUID.randomUUID().toString(),id,owner());
+        mvc.perform(get(path).with(user("HORSE_OWNER@test.com"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].new_owner_name").value("HORSE_OWNER")).andExpect(jsonPath("$[0].previous_owner_name").isEmpty());
+        mvc.perform(get(path).with(user("HEAD_TRAINER@test.com"))).andExpect(status().isForbidden());
+        db.update("UPDATE horses SET owner_id=NULL WHERE id=?",id);
+        mvc.perform(get(path).with(user("HORSE_OWNER@test.com"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/horses/"+UUID.randomUUID()+"/ownership-history").with(user("CLUB_MANAGER@test.com"))).andExpect(status().isNotFound());
+    }
+
     @Test void ownershipAndPermissions() throws Exception {
         String id=createHorse();
         mvc.perform(get("/api/horses/"+id).with(user("HORSE_OWNER@test.com"))).andExpect(status().isOk());

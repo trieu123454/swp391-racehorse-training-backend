@@ -15,6 +15,7 @@ public final class VetHttpSecurity {
                 || path.equals("/api/groom") || path.startsWith("/api/groom/")
                 || path.startsWith("/api/vet/") || path.startsWith("/api/periodic-care-schedules")
                 || path.startsWith("/api/medical-records/") || path.startsWith("/api/prescriptions/") || path.startsWith("/api/diet-records/")
+                || path.startsWith("/api/injury-markers/")
                 || path.equals("/api/health-exams") || path.startsWith("/api/health-exams/")
                 || path.equals("/api/notifications") || path.startsWith("/api/notifications/");
     }

@@ -44,6 +44,11 @@ public class HeadTrainerController {
         return service.stableIncidents(user.getName());
     }
 
+    @GetMapping("/head-trainer/diet-records")
+    public Map<String,Object> dietRecords(Principal user) {
+        return service.dietRecords(user.getName());
+    }
+
     @PatchMapping("/head-trainer/stable-incidents/{id}/result")
     public Map<String,Object> submitIncidentResult(Principal user,HttpServletRequest request,
             @PathVariable UUID id,@RequestBody JsonNode body) {

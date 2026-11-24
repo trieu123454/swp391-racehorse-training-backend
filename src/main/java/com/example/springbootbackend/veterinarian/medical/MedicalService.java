@@ -22,7 +22,7 @@ public class MedicalService {
 
     @Transactional
     public Map<String,Object> createRecord(String email,String ip,String horse,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,true);
+        long actor=access.requireVeterinarian(email); access.requireHorse(horse,true);
         var fields=VetInput.parse(body,"health_exam_id:uuid","diagnosis:0","treatment_plan:0");
         VetInput.required(fields,"diagnosis"); data.sameHorse("health_exams",fields.get("health_exam_id"),horse);
         fields.put("horse_id",horse); fields.put("doctor_id",actor); fields.put("created_at",time.utcNow());
@@ -31,7 +31,7 @@ public class MedicalService {
     }
 
     public Map<String,Object> record(String email,String id) {
-        access.requireRole(email, "VETERINARIAN"); var row=data.row("medical_records",id,false);
+        access.requireVeterinarian(email); var row=data.row("medical_records",id,false);
         row.put("prescriptions",data.db.query("SELECT * FROM prescriptions WHERE medical_record_id=? ORDER BY created_at DESC,id DESC",VetRows.MAPPER,id));
         row.put("injury_markers",data.db.query("SELECT * FROM injury_markers WHERE medical_record_id=? ORDER BY marked_at DESC,id DESC",VetRows.MAPPER,id));
         return row;
@@ -39,21 +39,21 @@ public class MedicalService {
 
     @Transactional
     public Map<String,Object> updateRecord(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var old=data.row("medical_records",id,true);
+        long actor=access.requireVeterinarian(email); var old=data.row("medical_records",id,true);
         var patch=VetInput.parse(body,"diagnosis:0","treatment_plan:0"); var merged=merge(old,patch);
         VetInput.required(merged,"diagnosis"); data.update("medical_records",id,patch);
         audit.record(actor,ip,"UPDATE_MEDICAL_RECORD:"+id); return data.row("medical_records",id,false);
     }
 
     public Map<String,Object> listRecords(String email,String horse,ApiPage page) {
-        access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,false);
+        access.requireVeterinarian(email); access.requireHorse(horse,false);
         return data.page("SELECT * FROM medical_records","SELECT count(*) FROM medical_records"," WHERE horse_id=?",
                 " ORDER BY created_at DESC,id DESC",List.of(horse),page);
     }
 
     @Transactional
     public Map<String,Object> createPrescription(String email,String ip,String recordId,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var record=data.row("medical_records",recordId,true);
+        long actor=access.requireVeterinarian(email); var record=data.row("medical_records",recordId,true);
         String horse=record.get("horse_id").toString();
         var fields=VetInput.parse(body,"drug_name:150","dosage:100","frequency:100","route:50","start_date:date","end_date:date","notes:0");
         VetInput.required(fields,"drug_name"); fields.putIfAbsent("start_date",time.today()); VetInput.dates(fields,"start_date","end_date");
@@ -71,7 +71,7 @@ public class MedicalService {
 
     @Transactional
     public Map<String,Object> updatePrescription(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var old=data.row("prescriptions",id,true);
+        long actor=access.requireVeterinarian(email); var old=data.row("prescriptions",id,true);
         if(!"Active".equals(old.get("status"))) throw new VetException(409,"PRESCRIPTION_CLOSED","Đơn thuốc đã kết thúc");
         var patch=VetInput.parse(body,"dosage:100","frequency:100","route:50","end_date:date","notes:0","status:20");
         var merged=merge(old,patch); VetInput.choice(merged,"status","Active","Completed","Stopped");
@@ -86,7 +86,7 @@ public class MedicalService {
     }
 
     public Map<String,Object> prescriptions(String email,String horse,String status,ApiPage page) {
-        access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,false);
+        access.requireVeterinarian(email); access.requireHorse(horse,false);
         String where=" WHERE horse_id=?"; var args=new ArrayList<Object>(List.of(horse));
         if(status!=null) {
             VetInput.choice(Map.of("status",status),"status","Active","Completed","Stopped"); where+=" AND status=?"; args.add(status);
@@ -96,7 +96,7 @@ public class MedicalService {
 
     @Transactional
     public Map<String,Object> saveDiet(String email,String ip,String horse,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN");
+        long actor=access.requireVeterinarian(email);
         Map<String,Object> old=id==null?new LinkedHashMap<>():data.row("diet_records",id,true);
         if(id!=null) horse=old.get("horse_id").toString();
         access.requireHorse(horse,true);
@@ -120,7 +120,7 @@ public class MedicalService {
     }
 
     public Map<String,Object> diets(String email,String horse,LocalDate activeOn,boolean history,ApiPage page) {
-        access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,false);
+        access.requireVeterinarian(email); access.requireHorse(horse,false);
         String where=" WHERE horse_id=?"; var args=new ArrayList<Object>(List.of(horse));
         if(!history) {
             LocalDate date=activeOn==null?time.today():activeOn;
@@ -131,7 +131,7 @@ public class MedicalService {
 
     @Transactional
     public Map<String,Object> createInjury(String email,String ip,String horse,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,true);
+        long actor=access.requireVeterinarian(email); access.requireHorse(horse,true);
         var fields=VetInput.parse(body,"medical_record_id:uuid","body_part:50","coordinate_x:number","coordinate_y:number","coordinate_z:number","severity:20","recovery_status:20","description:0");
         VetInput.required(fields,"body_part"); VetInput.choice(fields,"severity","Mild","Moderate","Severe");
         fields.putIfAbsent("recovery_status","Active"); VetInput.choice(fields,"recovery_status","Active","Recovering","Recovered");
@@ -141,6 +141,45 @@ public class MedicalService {
         fields.put("horse_id",horse); fields.put("marked_by",actor); fields.put("marked_at",time.utcNow());
         String id=data.insert("injury_markers",fields); audit.record(actor,ip,"CREATE_INJURY_MARKER:"+id);
         var result=data.row("injury_markers",id,false);
+        return applyInjuryConsequences(horse,fields,result);
+    }
+
+    @Transactional
+    public Map<String,Object> appendInjury(String email,String ip,String sourceId,JsonNode body) {
+        long actor=access.requireVeterinarian(email);
+        var source=data.row("injury_markers",sourceId,true);
+        String horse=source.get("horse_id").toString();
+        var latest=data.db.query("SELECT id FROM injury_markers WHERE horse_id=? AND lower(trim(body_part))=lower(trim(?)) "
+                +"ORDER BY marked_at DESC,id DESC LIMIT 1",VetRows.MAPPER,horse,source.get("body_part"));
+        if(latest.isEmpty() || !sourceId.equals(latest.getFirst().get("id")))
+            throw new VetException(409,"STALE_INJURY_MARKER","Only the latest injury assessment can be updated");
+
+        var patch=VetInput.parse(body,"medical_record_id:uuid","body_part:50","coordinate_x:number","coordinate_y:number","coordinate_z:number","severity:20","recovery_status:20","description:0");
+        if(patch.isEmpty()) throw VetException.invalid("body","At least one update field is required");
+        if(patch.containsKey("body_part") && !Objects.equals(patch.get("body_part"),source.get("body_part")))
+            throw VetException.invalid("body_part","The body part cannot change within an injury history");
+        if(patch.containsKey("coordinate_x") != patch.containsKey("coordinate_y"))
+            throw VetException.invalid("coordinate_y","Both coordinate_x and coordinate_y are required when changing coordinates");
+
+        var fields=new LinkedHashMap<String,Object>();
+        for(String field:List.of("medical_record_id","body_part","coordinate_x","coordinate_y","coordinate_z","severity","recovery_status","description"))
+            fields.put(field,source.get(field));
+        fields.putAll(patch);
+        VetInput.required(fields,"body_part"); VetInput.choice(fields,"severity","Mild","Moderate","Severe");
+        VetInput.choice(fields,"recovery_status","Active","Recovering","Recovered");
+        if((fields.get("coordinate_x")==null)!=(fields.get("coordinate_y")==null))
+            throw VetException.invalid("coordinate_y","Both coordinate_x and coordinate_y are required");
+        for(String coordinate:List.of("coordinate_x","coordinate_y","coordinate_z")) VetInput.number(fields,coordinate,"-999.999","999.999",3);
+        data.sameHorse("medical_records",fields.get("medical_record_id"),horse);
+
+        fields.put("horse_id",horse); fields.put("marked_by",actor); fields.put("marked_at",time.utcNow());
+        String id=data.insert("injury_markers",fields);
+        audit.record(actor,ip,"APPEND_INJURY_HISTORY:"+sourceId+":"+id);
+        var result=data.row("injury_markers",id,false);
+        return applyInjuryConsequences(horse,fields,result);
+    }
+
+    private Map<String,Object> applyInjuryConsequences(String horse,Map<String,Object> fields,Map<String,Object> result) {
         if(!"Recovered".equals(fields.get("recovery_status"))) {
             var horseRow=data.db.query("SELECT current_status,horse_name,is_training_locked,lock_level FROM horses WHERE id=?",VetRows.MAPPER,horse).getFirst();
             Map<String,Object> updates=new LinkedHashMap<>();
@@ -181,7 +220,7 @@ public class MedicalService {
     }
 
     public Map<String,Object> injuries(String email,String horse,boolean latest,String bodyPart,ApiPage page) {
-        access.requireRole(email, "VETERINARIAN"); access.requireHorse(horse,false);
+        access.requireVeterinarian(email); access.requireHorse(horse,false);
         String source="(SELECT i.*,ROW_NUMBER() OVER(PARTITION BY lower(trim(body_part)) ORDER BY marked_at DESC,id DESC) AS position "
                 +"FROM injury_markers i WHERE horse_id=?) ranked";
         String where=" WHERE 1=1"; var args=new ArrayList<Object>(List.of(horse));

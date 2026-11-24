@@ -28,7 +28,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties={"spring.config.import=","spring.datasource.url=jdbc:h2:mem:vet_tests;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
+@SpringBootTest(properties={"spring.config.import=","spring.datasource.driver-class-name=org.h2.Driver","spring.datasource.username=sa","spring.datasource.password=","spring.datasource.url=jdbc:h2:mem:vet_tests;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
 @AutoConfigureMockMvc @ActiveProfiles("test")
 class VeterinarianTests {
     @Autowired MockMvc mvc;
@@ -38,8 +38,10 @@ class VeterinarianTests {
     @Autowired JwtService jwt;
     @Autowired VetHorseService horseService;
     @Autowired CareScheduleService careService;
+    @Autowired com.example.springbootbackend.veterinarian.notification.NotificationStreamService notificationStreams;
     @Autowired PlatformTransactionManager transactions;
     @MockBean VetTime time;
+    @MockBean com.example.springbootbackend.horse.storage.CloudinaryHorseImages cloudinary;
     String horse, otherHorse;
     static final Instant NOW=Instant.parse("2026-09-28T04:00:00Z");
     static final LocalDate TODAY=LocalDate.of(2026,9,28);
@@ -75,6 +77,100 @@ class VeterinarianTests {
                     "SELECT r.role_name FROM users u JOIN roles r ON r.role_id=u.role_id WHERE u.email=?",String.class,email))))
                     .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
+    @ParameterizedTest
+    @ValueSource(strings={"VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "HORSE_OWNER", "HEAD_TRAINER", "CLUB_MANAGER"})
+    void sharedVetApisUseCurrentDatabaseRole(String role) throws Exception {
+        if (db.queryForObject("SELECT count(*) FROM roles WHERE role_name=?", Integer.class, role) == 0)
+            db.update("INSERT INTO roles(role_name) VALUES (?)", role);
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name=?) WHERE email=?",role,VET);
+        boolean allowed=List.of("VETERINARIAN","HEAD_VETERINARIAN").contains(role);
+        for (String path:List.of("/api/vet/health-overview", "/api/vet/stable-incidents?status=Open",
+                "/api/horses/"+horse+"/health-exams", "/api/horses/"+horse+"/medical-records")) {
+            mvc.perform(get(path).header("Authorization","Bearer "+token))
+                    .andExpect(status().is(allowed ? 200 : 403));
+        }
+        if (allowed) {
+            db.update("UPDATE users SET status='LOCKED' WHERE email=?",VET);
+            for (String path:List.of("/api/vet/health-overview", "/api/vet/stable-incidents?status=Open"))
+                mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings={"VETERINARIAN", "HEAD_VETERINARIAN"})
+    void clinicalRolesCanReadHorseImageButCannotModifyProfile(String role) throws Exception {
+        if (db.queryForObject("SELECT count(*) FROM roles WHERE role_name=?", Integer.class, role) == 0)
+            db.update("INSERT INTO roles(role_name) VALUES (?)", role);
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name=?) WHERE email=?",role,VET);
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        mvc.perform(get("/api/horses/"+horse+"/image").header("Authorization","Bearer "+token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasImage").value(false));
+        mvc.perform(delete("/api/horses/"+horse).header("Authorization","Bearer "+token))
+                .andExpect(status().isForbidden());
+        db.update("UPDATE users SET status='LOCKED' WHERE email=?",VET);
+        mvc.perform(get("/api/horses/"+horse+"/image").header("Authorization","Bearer "+token))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test void legacyCloudinaryImageUsesStoredAssetMetadataAndMissingAssetReturns404() throws Exception {
+        String marker="horses/cloudinary/e298ed64-ae0f-3e0c-8a1d-cfab1a8b910e.jpg";
+        db.update("UPDATE horses SET image_url=? WHERE id=?",marker,horse);
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        String path="/api/horses/"+horse+"/image";
+        when(cloudinary.resolve(marker)).thenReturn(Map.of("hasImage",true,"url","https://res.cloudinary.com/demo/image/upload/horses/real.png"));
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.hasImage").value(true)).andExpect(jsonPath("$.url").value("https://res.cloudinary.com/demo/image/upload/horses/real.png"));
+        when(cloudinary.resolve(marker)).thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND,"Horse image not found"));
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/horses/"+UUID.randomUUID()+"/image").header("Authorization","Bearer "+token)).andExpect(status().isNotFound());
+    }
+
+    @Test void horseImageRequiresBearerAndReturnsImageMetadata() throws Exception {
+        String path="/api/horses/"+horse+"/image";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization","Bearer invalid")).andExpect(status().isUnauthorized());
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        mvc.perform(get(path).cookie(new jakarta.servlet.http.Cookie("accessToken",token)))
+                .andExpect(status().isUnauthorized());
+        String imageUrl="https://example.com/horse-image.jpg";
+        db.update("UPDATE horses SET image_url=? WHERE id=?",imageUrl,horse);
+        mvc.perform(options(path).header("Origin","http://localhost:3000")
+                .header("Access-Control-Request-Method","GET")
+                .header("Access-Control-Request-Headers","authorization"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin","http://localhost:3000"));
+        mvc.perform(get(path).header("Origin","http://localhost:3000").header("Authorization","Bearer "+token))
+                .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith("application/json"))
+                .andExpect(jsonPath("$.hasImage").value(true)).andExpect(jsonPath("$.url").value(imageUrl));
+    }
+
+    @Test void horseImagePreservesOwnershipAndAssignmentRestrictions() throws Exception {
+        String path="/api/horses/"+horse+"/image";
+        String ownerToken=jwt.createAccessToken(users.findByEmailIgnoreCase("owner@test.com").orElseThrow());
+        mvc.perform(get(path).header("Authorization","Bearer "+ownerToken)).andExpect(status().isForbidden());
+        db.update("UPDATE horses SET owner_id=? WHERE id=?",uid("owner@test.com"),horse);
+        mvc.perform(get(path).header("Authorization","Bearer "+ownerToken)).andExpect(status().isOk());
+        String groomToken=jwt.createAccessToken(users.findByEmailIgnoreCase("groom@test.com").orElseThrow());
+        mvc.perform(get(path).header("Authorization","Bearer "+groomToken)).andExpect(status().isForbidden());
+        db.update("UPDATE users SET must_change_password=TRUE WHERE email=?","owner@test.com");
+        mvc.perform(get(path).header("Authorization","Bearer "+ownerToken)).andExpect(status().isForbidden());
+    }
+
+    @Test void unimplementedFrontendUrlsAreRoute404RatherThanBusiness404() throws Exception {
+        String vetToken=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        for(String path:List.of("/api/veterinarian/workload", "/api/vet/workload")) {
+            mvc.perform(get(path).header("Authorization","Bearer "+vetToken))
+                    .andExpect(status().isNotFound())
+                    .andExpect(result -> assertThat(result.getResolvedException())
+                            .isInstanceOf(org.springframework.web.servlet.resource.NoResourceFoundException.class));
+        }
+        mvc.perform(get("/api/horses/"+UUID.randomUUID()+"/image").header("Authorization","Bearer "+vetToken))
+                .andExpect(status().isNotFound())
+                .andExpect(result -> assertThat(result.getResolvedException())
+                        .isInstanceOf(org.springframework.web.server.ResponseStatusException.class));
+    }
+
     @Test void realJwtUsesCurrentRoleAndStatus() throws Exception {
         String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
         String path="/api/horses/"+horse+"/health-exams";
@@ -90,6 +186,24 @@ class VeterinarianTests {
         mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
+    @Test void examListPreservesEnvelopeNullsPaginationAndMissingHorseStatus() throws Exception {
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(VET).orElseThrow());
+        String path="/api/horses/"+horse+"/health-exams";
+        mvc.perform(get(path+"?page=1&limit=20").header("Authorization","Bearer "+token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").isEmpty())
+                .andExpect(jsonPath("$.total").value(0)).andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.limit").value(20));
+        String id=createExam();
+        db.update("UPDATE health_exams SET doctor_id=NULL,temperature_c=NULL,exam_date=NULL WHERE id=?",id);
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].id").value(id)).andExpect(jsonPath("$.data[0].doctor").isEmpty())
+                .andExpect(jsonPath("$.data[0].temperature_c").isEmpty()).andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get(path+"?page=2&limit=1").header("Authorization","Bearer "+token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").isEmpty()).andExpect(jsonPath("$.total").value(1));
+        mvc.perform(get("/api/horses/"+UUID.randomUUID()+"/health-exams").header("Authorization","Bearer "+token))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("HORSE_NOT_FOUND"));
+    }
+
     @Test void createExamIgnoresProtectedFieldsAndReturnsAlertsUtcDoctorAndAudit() throws Exception {
         var body=exam(); body.put("doctor_id",uid(OTHER)); body.put("horse_id",otherHorse); body.put("exam_date","2026-09-28T09:30:00+07:00");
         call(body(post("/api/horses/"+horse+"/health-exams"),body)).andExpect(status().isCreated())
@@ -120,8 +234,11 @@ class VeterinarianTests {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.exam.doctor.id").value(uid(VET)));
         call(get("/api/health-exams/"+id+"/logs")).andExpect(status().isOk()).andExpect(jsonPath("$.data[0].edited_by.id").value(uid(OTHER)))
                 .andExpect(jsonPath("$.data[0].changes.length()").value(1)).andExpect(jsonPath("$.data[0].changes[0].old_value").value(38.9));
-        call(get("/api/horses/"+horse+"/health-exams")).andExpect(jsonPath("$.data[0].has_edits").value(true));
-        call(get("/api/health-exams/"+id)).andExpect(jsonPath("$.last_edited_by.id").value(uid(OTHER)));
+        call(get("/api/horses/"+horse+"/health-exams?page=1&limit=20")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].has_edits").value(true))
+                .andExpect(jsonPath("$.total").value(1)).andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.limit").value(20));
+        call(get("/api/health-exams/"+id)).andExpect(status().isOk()).andExpect(jsonPath("$.last_edited_by.id").value(uid(OTHER)));
         call(delete("/api/health-exams/"+id)).andExpect(status().isMethodNotAllowed());
     }
     @Test void historyFailureRollsBackExamAndAudit() throws Exception {
@@ -342,4 +459,92 @@ class VeterinarianTests {
         assertThat(db.queryForObject("SELECT count(*) FROM periodic_care_schedules",Long.class)).isZero();
         assertThat(db.queryForObject("SELECT count(*) FROM notifications",Long.class)).isZero();
     }
+
+    @Test void reassignCareRequiresHeadVetAndValidTarget() throws Exception {
+        String id=createCare(schedule(horse,TODAY.plusDays(1).toString())).get("id").asText();
+        String path="/api/periodic-care-schedules/"+id+"/reassign";
+        call(body(patch(path),Map.of("assigned_doctor_id",uid(OTHER)))).andExpect(status().isForbidden());
+        db.update("INSERT INTO roles(role_name) SELECT 'HEAD_VETERINARIAN' WHERE NOT EXISTS (SELECT 1 FROM roles WHERE role_name='HEAD_VETERINARIAN')");
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='HEAD_VETERINARIAN') WHERE email=?",VET);
+        var head=user(VET).roles("HEAD_VETERINARIAN");
+        mvc.perform(body(patch(path),Map.of()).with(head)).andExpect(status().isBadRequest());
+        mvc.perform(body(patch(path),Map.of("assigned_doctor_id",uid("owner@test.com"))).with(head)).andExpect(status().isBadRequest());
+        mvc.perform(body(patch(path),Map.of("assigned_doctor_id",99999999)).with(head)).andExpect(status().isBadRequest());
+        mvc.perform(body(patch("/api/periodic-care-schedules/"+UUID.randomUUID()+"/reassign"),Map.of("assigned_doctor_id",uid(OTHER))).with(head)).andExpect(status().isNotFound());
+        mvc.perform(body(patch(path),Map.of("assigned_doctor_id",uid(OTHER))).with(head))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.assigned_doctor_id").value(uid(OTHER)));
+        assertThat(db.queryForObject("SELECT count(*) FROM audit_logs WHERE action_performed LIKE 'REASSIGN_CARE_SCHEDULE:%'",Long.class)).isEqualTo(1);
+    }
+
+    @Test void reassignCareRejectsConflictWithoutChangingAssignment() throws Exception {
+        String id=createCare(schedule(horse,TODAY.plusDays(1).toString())).get("id").asText();
+        var other=schedule(otherHorse,TODAY.plusDays(1).toString()); other.put("assigned_doctor_id",uid(OTHER));
+        createCare(other);
+        db.update("INSERT INTO roles(role_name) SELECT 'HEAD_VETERINARIAN' WHERE NOT EXISTS (SELECT 1 FROM roles WHERE role_name='HEAD_VETERINARIAN')");
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='HEAD_VETERINARIAN') WHERE email=?",VET);
+        mvc.perform(body(patch("/api/periodic-care-schedules/"+id+"/reassign"),Map.of("assigned_doctor_id",uid(OTHER)))
+                .with(user(VET).roles("HEAD_VETERINARIAN"))).andExpect(status().isConflict());
+        assertThat(db.queryForObject("SELECT assigned_doctor_id FROM periodic_care_schedules WHERE id=?",Long.class,id)).isEqualTo(uid(VET));
+    }
+
+    @Test void reassignUnbookedCareRuleDoesNotCreateAppointment() throws Exception {
+        var input=schedule(horse,TODAY.plusDays(1).toString());input.put("book_event",false);
+        String id=createCare(input).get("id").asText();
+        db.update("INSERT INTO roles(role_name) SELECT 'HEAD_VETERINARIAN' WHERE NOT EXISTS (SELECT 1 FROM roles WHERE role_name='HEAD_VETERINARIAN')");
+        db.update("UPDATE users SET role_id=(SELECT role_id FROM roles WHERE role_name='HEAD_VETERINARIAN') WHERE email=?",VET);
+        mvc.perform(body(patch("/api/periodic-care-schedules/"+id+"/reassign"),Map.of("assigned_doctor_id",uid(OTHER)))
+                .with(user(VET).roles("HEAD_VETERINARIAN"))).andExpect(status().isOk());
+        assertThat(db.queryForObject("SELECT calendar_event_id FROM periodic_care_schedules WHERE id=?",String.class,id)).isNull();
+    }
+
+
+    @Test void notificationDeleteAndTargetRespectOwnershipAndDueTime() throws Exception {
+        String scheduleId=createCare(schedule(horse,TODAY.plusDays(1).toString())).get("id").asText();
+        createCare(schedule(otherHorse,TODAY.plusDays(3).toString()));
+        String id=db.queryForObject("SELECT id FROM notifications WHERE scheduled_at<=?",String.class,time.utcNow()).trim();
+        String futureId=db.queryForObject("SELECT id FROM notifications WHERE scheduled_at>?",String.class,time.utcNow()).trim();
+        mvc.perform(delete("/api/notifications/"+id)).andExpect(status().isUnauthorized());
+        mvc.perform(delete("/api/notifications/"+id).with(user(OTHER).roles("VETERINARIAN"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/notifications/"+id+"/target").with(user(OTHER).roles("VETERINARIAN"))).andExpect(status().isNotFound());
+        call(get("/api/notifications/"+futureId+"/target")).andExpect(status().isNotFound());
+        call(delete("/api/notifications/"+futureId)).andExpect(status().isNotFound());
+        call(get("/api/notifications/"+id+"/target")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.horse_id").value(horse)).andExpect(jsonPath("$.schedule_id").value(scheduleId));
+        call(delete("/api/notifications/"+id)).andExpect(status().isNoContent());
+        call(delete("/api/notifications/"+id)).andExpect(status().isNotFound());
+        call(get("/api/notifications")).andExpect(jsonPath("$.unread_count").value(0)).andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test void notificationStreamIsAuthenticatedAndPushesReadChanges() throws Exception {
+        createCare(schedule(horse,TODAY.plusDays(1).toString()));
+        String id=db.queryForObject("SELECT id FROM notifications WHERE scheduled_at<=?",String.class,time.utcNow()).trim();
+        mvc.perform(get("/api/notifications/stream")).andExpect(status().isUnauthorized());
+        var stream=call(get("/api/notifications/stream")).andExpect(status().isOk()).andExpect(request().asyncStarted())
+                .andExpect(content().contentTypeCompatibleWith("text/event-stream")).andReturn();
+        String initial=stream.getResponse().getContentAsString();
+        assertThat(initial).contains("event:notifications");
+        call(patch("/api/notifications/"+id+"/read")).andExpect(status().isOk());
+        notificationStreams.checkDueNotifications();
+        assertThat(stream.getResponse().getContentAsString().length()).isGreaterThan(initial.length());
+        call(get("/api/notifications?unread_only=true")).andExpect(jsonPath("$.unread_count").value(0));
+    }
+
+
+    @Test void notificationContentCapturesCareFactsWithoutPersistingSentences() throws Exception {
+        String original=db.queryForObject("SELECT horse_name FROM horses WHERE id=?",String.class,horse);
+        createCare(schedule(horse,TODAY.plusDays(1).toString()));
+        var row=db.queryForMap("SELECT type,title,params,message,link FROM notifications");
+        assertThat(row.get("type")).isEqualTo("CARE_ASSIGNED");
+        assertThat(row.get("title")).isEqualTo("Lịch chăm sóc mới");
+        assertThat(row.get("message")).isEqualTo("");
+        var facts=json.readTree(row.get("params").toString());
+        assertThat(facts.get("horse_name").asText()).isEqualTo(original);
+        assertThat(facts.get("event_date").asText()).isEqualTo(TODAY.plusDays(1).toString());
+        assertThat(row.get("link").toString()).contains("tab=care","horse="+horse);
+        db.update("UPDATE horses SET horse_name='Changed later' WHERE id=?",horse);
+        call(get("/api/notifications")).andExpect(jsonPath("$.data[0].params.horse_name").value(original))
+                .andExpect(jsonPath("$.data[0].type").value("CARE_ASSIGNED"))
+                .andExpect(jsonPath("$.data[0].is_read").value(false)).andExpect(jsonPath("$.unread_count").value(1));
+    }
+
 }

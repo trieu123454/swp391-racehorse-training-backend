@@ -57,9 +57,15 @@ class AuthControllerTests {
                 .andExpect(jsonPath("$.accessToken").isString())
                 .andReturn();
         String token = json.readTree(result.getResponse().getContentAsString()).get("refreshToken").asText();
-        mockMvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+        String sessionId = tokens.findByToken(token).orElseThrow().getSessionId();
+        assertThat(sessionId).hasSize(36);
+
+        var refreshed = mockMvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(java.util.Map.of("refreshToken", token))))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.user.status").value("APPROVED"));
+        String rotatedToken = json.readTree(refreshed.andReturn().getResponse().getContentAsString())
+                .get("refreshToken").asText();
+        assertThat(tokens.findByToken(rotatedToken).orElseThrow().getSessionId()).isEqualTo(sessionId);
     }
 
     @ParameterizedTest

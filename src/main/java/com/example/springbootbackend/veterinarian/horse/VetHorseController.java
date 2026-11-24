@@ -8,7 +8,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN','HEAD_VETERINARIAN')")
 @io.swagger.v3.oas.annotations.tags.Tag(name="Veterinarian - Horse health and training lock")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bearerAuth")
 public class VetHorseController {

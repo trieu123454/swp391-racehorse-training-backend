@@ -28,4 +28,10 @@ public record RegisterRequest(
         if (email != null) email = email.trim().toLowerCase(java.util.Locale.ROOT);
         if (fullName != null) fullName = fullName.trim();
     }
+
+    @Override
+    public String toString() {
+        return "RegisterRequest[fullName=" + fullName + ", email=" + email + ", phone=" + phone
+                + ", password=[REDACTED], roleName=" + roleName + "]";
+    }
 }

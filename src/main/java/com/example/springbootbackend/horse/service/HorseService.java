@@ -32,7 +32,7 @@ public class HorseService {
         var row=rows.getFirst();
         var actor=new Actor(((Number)row.get("user_id")).longValue(),(String)row.get("role_name"));
         if(Boolean.TRUE.equals(row.get("must_change_password"))) throw new ResponseStatusException(FORBIDDEN,"Change password before using business APIs");
-        if(write ? !actor.role().equals("CLUB_MANAGER") : !Set.of("CLUB_MANAGER","HEAD_TRAINER","VETERINARIAN","GROOM","HORSE_OWNER").contains(actor.role()))
+        if(write ? !actor.role().equals("CLUB_MANAGER") : !Set.of("CLUB_MANAGER","HEAD_TRAINER","VETERINARIAN","HEAD_VETERINARIAN","GROOM","HORSE_OWNER").contains(actor.role()))
             throw new ResponseStatusException(FORBIDDEN,"Không có quyền truy cập");
         return actor;
     }
@@ -67,13 +67,34 @@ public class HorseService {
         String columns = actor.role().equals("GROOM")
             ? "h.id,h.horse_name,h.image_url,h.stable_box_id,h.current_status,h.height_cm,h.current_weight_kg,s.box_code,s.section," + latestMetricWeight
             : "h.*,s.box_code,s.section,u.full_name AS owner_name," + latestMetricWeight;
-        var items = db.queryForList("SELECT " + columns + " FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users u ON u.user_id=h.owner_id"+where+" ORDER BY h.created_at DESC,h.id LIMIT ? OFFSET ?",args.toArray());
+        var items = db.queryForList("SELECT " + columns + " FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id LEFT JOIN users u ON u.user_id=h.owner_id"+where+" ORDER BY s.box_code ASC NULLS LAST,h.horse_name ASC,h.id LIMIT ? OFFSET ?",args.toArray());
         items=items.stream().map(row -> {
             Object latestWeight=row.remove("latest_metric_weight_kg");
             if(row.get("current_weight_kg")==null && latestWeight!=null) row.put("current_weight_kg",latestWeight);
-            return actor.role().equals("GROOM") ? groomHorseSummary(row) : row;
+            if(actor.role().equals("GROOM")) return groomHorseSummary(row);
+            if(row.get("stable_box_id")==null) {
+                row.put("stable_box",null);
+            } else {
+                Map<String,Object> stableBox=new LinkedHashMap<>();
+                stableBox.put("id",row.get("stable_box_id"));
+                stableBox.put("box_code",row.get("box_code"));
+                stableBox.put("section",row.get("section"));
+                row.put("stable_box",stableBox);
+            }
+            return row;
         }).toList();
         return Map.of("items",items,"data",items,"total",total,"page",page,"size",size,"limit",size);
+    }
+
+    public List<Map<String,Object>> ownershipHistory(Actor actor,UUID id) {
+        if(!Set.of("CLUB_MANAGER","HORSE_OWNER").contains(actor.role()))
+            throw new ResponseStatusException(FORBIDDEN,"Ownership history is restricted to managers and the current owner");
+        detail(actor,id);
+        return db.query("SELECT h.*,p.full_name AS previous_owner_name,n.full_name AS new_owner_name,"
+                +"a.full_name AS changed_by_name FROM horse_ownership_history h "
+                +"LEFT JOIN users p ON p.user_id=h.previous_owner_id LEFT JOIN users n ON n.user_id=h.new_owner_id "
+                +"LEFT JOIN users a ON a.user_id=h.changed_by WHERE h.horse_id=? "
+                +"ORDER BY h.changed_at DESC,h.id DESC",com.example.springbootbackend.veterinarian.support.VetRows.MAPPER,id.toString());
     }
 
     public Map<String,Object> detail(Actor actor,UUID id) {
@@ -98,7 +119,10 @@ public class HorseService {
         if(horse.get("current_weight_kg")==null && latestWeight!=null) horse.put("current_weight_kg",latestWeight);
         if(actor.role().equals("HORSE_OWNER") && (!(horse.get("owner_id") instanceof Number owner) || owner.longValue()!=actor.id()))
             throw new ResponseStatusException(FORBIDDEN,"Ngựa không thuộc sở hữu của bạn");
-        horse.put("stable_box", Map.of("id", horse.get("stable_box_id"), "box_code", horse.get("box_code")));
+        Map<String,Object> stableBox = new LinkedHashMap<>();
+        stableBox.put("id", horse.get("stable_box_id"));
+        stableBox.put("box_code", horse.get("box_code"));
+        horse.put("stable_box", horse.get("stable_box_id") == null ? null : stableBox);
         horse.put("owner", horse.get("owner_id") == null ? null : Map.of("id", horse.get("owner_id"), "full_name", horse.get("owner_name")));
         return horse;
     }

@@ -8,4 +8,8 @@ public record GoogleLoginRequest(
 
         String roleName
 ) {
+    @Override
+    public String toString() {
+        return "GoogleLoginRequest[idToken=[REDACTED], roleName=" + roleName + "]";
+    }
 }

@@ -11,6 +11,11 @@ import java.util.Map;
 
 @RestControllerAdvice(assignableTypes = ClubManagerController.class)
 public class ClubManagerExceptionHandler {
+    @ExceptionHandler({org.springframework.http.converter.HttpMessageNotReadableException.class,
+        org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class})
+    ResponseEntity<Map<String,String>> invalidInput(Exception error) {
+        return ResponseEntity.badRequest().body(Map.of("message","Invalid action, identifier or JSON body"));
+    }
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Map<String, String>> business(ResponseStatusException exception) {
         return ResponseEntity.status(exception.getStatusCode())

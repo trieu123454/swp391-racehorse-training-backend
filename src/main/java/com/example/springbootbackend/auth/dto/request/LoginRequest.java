@@ -14,4 +14,9 @@ public record LoginRequest(
     public LoginRequest {
         if (email != null) email = email.trim().toLowerCase(java.util.Locale.ROOT);
     }
+
+    @Override
+    public String toString() {
+        return "LoginRequest[email=" + email + ", password=[REDACTED]]";
+    }
 }

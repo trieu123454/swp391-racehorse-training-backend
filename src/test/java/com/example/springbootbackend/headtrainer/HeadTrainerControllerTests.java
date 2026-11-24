@@ -26,7 +26,9 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties = {"spring.config.import=", "spring.datasource.url=jdbc:h2:mem:head_trainer_tests;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
+@SpringBootTest(properties = {"spring.config.import=", "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.datasource.username=sa", "spring.datasource.password=",
+        "spring.datasource.url=jdbc:h2:mem:head_trainer_tests;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class HeadTrainerControllerTests {
@@ -37,6 +39,8 @@ class HeadTrainerControllerTests {
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate db;
     @Autowired ObjectMapper json;
+    @Autowired com.example.springbootbackend.auth.repository.AppUserRepository users;
+    @Autowired com.example.springbootbackend.security.JwtService jwt;
     @MockBean VetTime time;
     @Autowired RaceSimulationService simulations;
     String horse;
@@ -69,6 +73,68 @@ class HeadTrainerControllerTests {
         horse = UUID.randomUUID().toString();
         otherHorse = UUID.randomUUID().toString();
         db.update("INSERT INTO horses(id,horse_name,readiness_status) VALUES (?, 'Thunder','Ready'),(?, 'Cloud','Ready')", horse, otherHorse);
+    }
+
+    @Test
+    void dietRecordsReturnsRealRowsAndEmptyEnvelopeUsingHeadTrainerBearer() throws Exception {
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase(HEAD).orElseThrow());
+        String path="/api/head-trainer/diet-records";
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray()).andExpect(jsonPath("$.data").isEmpty());
+        String id=UUID.randomUUID().toString();
+        db.update("INSERT INTO diet_records(id,horse_id,feed_type,quantity_kg,effective_date) VALUES (?,?,?,?,?)",
+                id,horse,"Hay",4,TODAY);
+        String deleted=UUID.randomUUID().toString();
+        db.update("INSERT INTO diet_records(id,horse_id,feed_type) VALUES (?,?,?)",deleted,otherHorse,"Oats");
+        db.update("UPDATE horses SET deleted_at=? WHERE id=?",LocalDateTime.ofInstant(NOW,ZoneOffset.UTC),otherHorse);
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1)).andExpect(jsonPath("$.data[0].id").value(id))
+                .andExpect(jsonPath("$.data[0].horse_id").value(horse)).andExpect(jsonPath("$.data[0].horse_name").value("Thunder"))
+                .andExpect(jsonPath("$.data[0].feed_type").value("Hay")).andExpect(jsonPath("$.data[0].doctor_name").isEmpty());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        String vetToken=jwt.createAccessToken(users.findByEmailIgnoreCase("vet@test.com").orElseThrow());
+        mvc.perform(get(path).header("Authorization","Bearer "+vetToken)).andExpect(status().isForbidden());
+        db.update("UPDATE users SET must_change_password=TRUE WHERE email=?",HEAD);
+        mvc.perform(get(path).header("Authorization","Bearer "+token)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void trainingAnalysisReadsConsolidatedV40Results() throws Exception {
+        String scheduleId=createSchedule(horse,null,"2026-10-03","06:00","07:00");
+        setNow(Instant.parse("2026-10-02T23:00:00Z"),LocalDate.of(2026,10,3));
+        String simulationId=start(scheduleId,horse,"Normal").get("simulation_id").asText();
+        db.execute("ALTER TABLE race_simulation_horses ADD COLUMN metric_id CHAR(36)");
+        db.execute("ALTER TABLE race_simulation_horses ADD COLUMN avg_speed_kmh DECIMAL(5,2)");
+        db.execute("ALTER TABLE race_simulation_horses ADD COLUMN max_heart_rate INT");
+        db.execute("ALTER TABLE race_simulation_horses ADD COLUMN has_injury_alert BOOLEAN");
+        try {
+            db.update("UPDATE race_simulation_horses SET metric_id=?,avg_speed_kmh=31.25,max_heart_rate=155,has_injury_alert=TRUE WHERE simulation_id=?",
+                    UUID.randomUUID().toString(),simulationId);
+            String token=jwt.createAccessToken(users.findByEmailIgnoreCase(HEAD).orElseThrow());
+            mvc.perform(get("/api/horses/"+horse+"/training-analysis?from=2026-10-03&to=2026-10-03")
+                    .header("Authorization","Bearer "+token)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[0].avg_speed_kmh").value(31.25))
+                    .andExpect(jsonPath("$.sessions[0].max_heart_rate").value(155))
+                    .andExpect(jsonPath("$.sessions[0].recommendation").value("REVIEW_WITH_VET"));
+            db.update("UPDATE race_simulation_horses SET metric_id=NULL WHERE simulation_id=?",simulationId);
+            call(get("/api/horses/"+horse+"/training-analysis?from=2026-10-03&to=2026-10-03"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.sessions[0].avg_speed_kmh").isEmpty());
+        } finally {
+            for(String column:List.of("metric_id","avg_speed_kmh","max_heart_rate","has_injury_alert"))
+                db.execute("ALTER TABLE race_simulation_horses DROP COLUMN "+column);
+        }
+    }
+
+    @Test
+    void trainingAnalysisValidatesDatesAndEmptyAndMissingHorses() throws Exception {
+        String path="/api/horses/"+horse+"/training-analysis";
+        call(get(path+"?from=2026-10-18&to=2026-11-17")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessions").isEmpty()).andExpect(jsonPath("$.trial_runs").isEmpty())
+                .andExpect(jsonPath("$.weeks").isArray());
+        call(get(path+"?from=2026-11-17&to=2026-10-18")).andExpect(status().isBadRequest());
+        call(get("/api/horses/"+UUID.randomUUID()+"/training-analysis")).andExpect(status().isNotFound());
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).with(user("vet@test.com").roles("VETERINARIAN"))).andExpect(status().isForbidden());
     }
 
     @Test
@@ -261,6 +327,51 @@ class HeadTrainerControllerTests {
     }
 
     @Test
+    void consolidatedSimulationLifecycleUsesInlineReadingsAndParticipantResults() throws Exception {
+        String originalView=db.queryForObject("SELECT view_definition FROM information_schema.views WHERE table_name='shared_training_metrics'",String.class);
+        db.execute("CREATE OR REPLACE VIEW shared_training_metrics AS SELECT * FROM training_metrics_logs");
+        db.execute("ALTER TABLE race_simulations ADD COLUMN readings_json TEXT");
+        var columns=Map.of("metric_id","CHAR(36)","finish_time_seconds","DECIMAL(10,2)",
+                "avg_speed_kmh","DECIMAL(5,2)","max_heart_rate","INT","max_bp_systolic","INT",
+                "max_bp_diastolic","INT","rank","INT","has_injury_alert","BOOLEAN","metric_created_at","TIMESTAMP");
+        for (var column:columns.entrySet()) db.execute("ALTER TABLE race_simulation_horses ADD COLUMN "+column.getKey()+" "+column.getValue());
+        db.execute("ALTER TABLE race_simulation_metrics RENAME TO unused_simulation_metrics");
+        db.execute("ALTER TABLE training_simulation_readings RENAME TO unused_simulation_readings");
+        try {
+            groupStartsSeparateLinkedSessionsAndRestoresAllRunningHorses();
+            assertThat(db.queryForObject("SELECT count(*) FROM race_simulation_horses WHERE metric_id IS NOT NULL",Integer.class)).isEqualTo(2);
+            String id=db.queryForObject("SELECT id FROM race_simulations ORDER BY id LIMIT 1",String.class);
+            call(get("/api/head-trainer/race-simulations/"+id)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.readings[0].elapsed_seconds").value(0))
+                    .andExpect(jsonPath("$.results[0].avg_speed_kmh").isNumber());
+            call(body(post("/api/head-trainer/race-simulations/"+id+"/finish"),Map.of()))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.ranking[0].rank").value(1));
+            call(get("/api/head-trainer/race-simulations/active-sessions")).andExpect(status().isOk());
+            assertThat(count("training_metrics_logs")).isEqualTo(2);
+        } finally {
+            db.execute("ALTER TABLE unused_simulation_metrics RENAME TO race_simulation_metrics");
+            db.execute("ALTER TABLE unused_simulation_readings RENAME TO training_simulation_readings");
+            db.execute("CREATE OR REPLACE VIEW shared_training_metrics AS "+originalView);
+            for (String column:columns.keySet()) db.execute("ALTER TABLE race_simulation_horses DROP COLUMN "+column);
+            db.execute("ALTER TABLE race_simulations DROP COLUMN readings_json");
+        }
+    }
+
+    @Test
+    void simulationStaticRoutesEnforceRoleAndValidateGroupBody() throws Exception {
+        String active="/api/head-trainer/race-simulations/active-sessions";
+        String group="/api/head-trainer/race-simulations/group";
+        mvc.perform(get(active)).andExpect(status().isUnauthorized());
+        mvc.perform(body(post(group),Map.of())).andExpect(status().isUnauthorized());
+        String token=jwt.createAccessToken(users.findByEmailIgnoreCase("vet@test.com").orElseThrow());
+        mvc.perform(get(active).header("Authorization","Bearer "+token)).andExpect(status().isForbidden());
+        mvc.perform(body(post(group),Map.of()).header("Authorization","Bearer "+token)).andExpect(status().isForbidden());
+        call(body(post(group),Map.of())).andExpect(status().isBadRequest());
+        call(get("/api/head-trainer/race-simulations/not-a-uuid")).andExpect(status().isBadRequest());
+        assertThat(count("race_simulations")).isZero();
+    }
+
+    @Test
     void invalidGroupRollsBackEveryStartAndDuplicateHorseIsRejected() throws Exception {
         if (horse.compareTo(otherHorse)>0) { String swap=horse; horse=otherHorse; otherHorse=swap; }
         String first=createSchedule(horse,null,"2026-10-03","06:00","07:00");
@@ -362,7 +473,7 @@ class HeadTrainerControllerTests {
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("SCHEDULE_NOT_STARTABLE"));
         db.update("UPDATE users SET must_change_password=TRUE WHERE email=?",HEAD);
         setNow(Instant.parse("2026-10-03T00:00:00Z"),LocalDate.of(2026,10,3));
-        new TrainingSessionMaintenance(db,simulations,time).tick();
+        new TrainingSessionMaintenance(db,new SimulationStorage(db,json),simulations,time).tick();
         assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,missed)).isEqualTo("Missed");
         assertThat(db.queryForObject("SELECT status FROM training_schedules WHERE id=?",String.class,rest)).isEqualTo("Scheduled");
         db.update("UPDATE users SET must_change_password=FALSE WHERE email=?",HEAD);

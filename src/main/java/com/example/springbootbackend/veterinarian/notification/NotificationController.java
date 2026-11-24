@@ -12,7 +12,8 @@ import org.springframework.web.bind.annotation.*;
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class NotificationController {
     private final NotificationService service;
-    public NotificationController(NotificationService service) { this.service = service; }
+    private final NotificationStreamService streams;
+    public NotificationController(NotificationService service, NotificationStreamService streams) { this.service = service; this.streams = streams; }
 
     @GetMapping
     public Map<String, Object> list(Principal user, @RequestParam(name = "unread_only", defaultValue = "false") boolean unreadOnly,
@@ -28,5 +29,21 @@ public class NotificationController {
     @PostMapping("/read-all")
     public Map<String, Object> readAll(Principal user, HttpServletRequest request) {
         return service.readAll(user.getName(), request.getRemoteAddr());
+    }
+
+    @GetMapping(value="/stream", produces="text/event-stream")
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter stream(Principal user) {
+        return streams.open(user.getName());
+    }
+
+    @GetMapping("/{id}/target")
+    public Map<String,Object> target(Principal user,@PathVariable UUID id) {
+        return service.target(user.getName(),id);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void delete(Principal user,HttpServletRequest request,@PathVariable UUID id) {
+        service.delete(user.getName(),request.getRemoteAddr(),id);
     }
 }

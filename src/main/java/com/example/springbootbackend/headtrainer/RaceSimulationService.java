@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class RaceSimulationService {
     private final JdbcTemplate db;
+    private final SimulationStorage storage;
     private final VetAccess access;
     private final VetAudit audit;
     private final VetTime time;
@@ -27,11 +28,11 @@ public class RaceSimulationService {
     private final BigDecimal injuryAlertSpeed;
     private final TrainingSimulationRecorder recorder;
 
-    public RaceSimulationService(JdbcTemplate db, VetAccess access, VetAudit audit, VetTime time,
+    public RaceSimulationService(JdbcTemplate db, SimulationStorage storage, VetAccess access, VetAudit audit, VetTime time,
             HorseTrainingGuard trainingGuard, TrainingSimulationRecorder recorder,
             @Value("${app.head-trainer.injury-alert-heart-rate:220}") int injuryAlertHeartRate,
             @Value("${app.head-trainer.injury-alert-speed-kmh:74}") BigDecimal injuryAlertSpeed) {
-        this.db = db; this.access = access; this.audit = audit; this.time = time;
+        this.storage=storage; this.db = db; this.access = access; this.audit = audit; this.time = time;
         this.trainingGuard = trainingGuard; this.recorder = recorder;
         this.injuryAlertHeartRate = injuryAlertHeartRate;
         this.injuryAlertSpeed = injuryAlertSpeed;
@@ -157,8 +158,8 @@ public class RaceSimulationService {
             throw new VetException(409, "SESSION_NOT_FINISHED", "Chua den gio ket thuc buoi tap");
         audit.record(actor, ip, "FINISH_RACE_SIMULATION:" + simulationId);
         var ranking = db.query("SELECT m.rank,m.horse_id,h.horse_name,m.finish_time_seconds"
-                + " FROM race_simulation_metrics m JOIN horses h ON h.id=m.horse_id"
-                + " WHERE m.simulation_id=? AND m.rank IS NOT NULL ORDER BY m.rank,m.lane", VetRows.MAPPER, simulationId.toString());
+                + " FROM " + storage.resultsTable() + " m JOIN horses h ON h.id=m.horse_id"
+                + " WHERE m.simulation_id=? AND " + storage.recordedPredicate("m") + " AND m.rank IS NOT NULL ORDER BY m.rank,m.lane", VetRows.MAPPER, simulationId.toString());
         Map<String,Object> response = new LinkedHashMap<>();
         response.put("simulation_id",simulationId.toString()); response.put("race_id",null);
         response.put("race_name","Training session"); response.put("status",session.get("status"));
@@ -231,9 +232,9 @@ public class RaceSimulationService {
         result.put("server_time",time.now());
         double progress = elapsed/(double)duration;
         result.put("phase",progress<0.2 ? "Warmup" : progress<0.7 ? "Work" : progress<0.9 ? "Cooldown" : "Recovery");
-        result.put("readings",db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds",VetRows.MAPPER,id));
-        result.put("results",db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM race_simulation_metrics m"
-                + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? ORDER BY m.lane",VetRows.MAPPER,id));
+        result.put("readings",storage.readings(id));
+        result.put("results",db.query("SELECT m.*,h.horse_name,sim.stamina_score FROM " + storage.resultsTable() + " m"
+                + " JOIN race_simulations sim ON sim.id=m.simulation_id JOIN horses h ON h.id=m.horse_id WHERE m.simulation_id=? AND " + storage.recordedPredicate("m") + " ORDER BY m.lane",VetRows.MAPPER,id));
         return result;
     }
 

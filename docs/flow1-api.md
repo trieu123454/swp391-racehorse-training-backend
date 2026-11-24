@@ -17,6 +17,8 @@ Storage is Supabase, replacing Firebase by agreement. All endpoints require the 
 
 Optional list filters (manager/trainer only): `search` (literal case-insensitive substring), `breed`, `currentStatus`, `stableBoxId`, `isTrainingLocked`. Filters combine with AND. Maximum page size 100. List response: `{items,total,page,size}`. Horse and option records use database snake_case keys; request fields use camelCase below.
 
+Horse list rows include `stable_box: {id, box_code, section}`; `box_code` is the chuồng name used for display/grouping. Results are ordered by chuồng name and then horse name, with unassigned horses last, so the client can render horses grouped under each chuồng.
+
 ```json
 {
   "horseName": "Thunder",

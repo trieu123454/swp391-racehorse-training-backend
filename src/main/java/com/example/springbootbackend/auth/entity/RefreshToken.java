@@ -1,6 +1,7 @@
 package com.example.springbootbackend.auth.entity;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -26,6 +27,9 @@ public class RefreshToken {
     @JoinColumn(name = "user_id", nullable = false)
     private AppUser user;
 
+    @Column(name = "session_id", nullable = false, length = 36)
+    private String sessionId;
+
     @Column(nullable = false, length = 500)
     private String token;
 
@@ -42,8 +46,13 @@ public class RefreshToken {
     }
 
     public RefreshToken(AppUser user, String token, LocalDateTime expiresAt) {
+        this(user, token, UUID.randomUUID().toString(), expiresAt);
+    }
+
+    public RefreshToken(AppUser user, String token, String sessionId, LocalDateTime expiresAt) {
         this.user = user;
         this.token = token;
+        this.sessionId = sessionId;
         this.expiresAt = expiresAt;
     }
 
@@ -58,6 +67,10 @@ public class RefreshToken {
 
     public String getToken() {
         return token;
+    }
+
+    public String getSessionId() {
+        return sessionId;
     }
 
     public LocalDateTime getExpiresAt() {

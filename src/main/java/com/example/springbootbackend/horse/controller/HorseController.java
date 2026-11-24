@@ -59,4 +59,8 @@ public class HorseController {
     public Map<String,Object> upload(Principal p,@RequestParam MultipartFile file) { return storage.upload(file,horses.actor(p.getName(),true).id()); }
     @GetMapping("/{id}/image")
     public Map<String,Object> image(Principal p,@PathVariable UUID id) { return storage.signedUrl((String)horses.detail(horses.actor(p.getName(),false),id).get("image_url")); }
+    @GetMapping("/{id}/ownership-history")
+    public List<Map<String,Object>> ownershipHistory(Principal p,@PathVariable UUID id) {
+        return horses.ownershipHistory(horses.actor(p.getName(),false),id);
+    }
 }

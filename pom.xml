@@ -18,7 +18,10 @@
     <description>Backend REST API for the SWP391 Racehorse Training Management System.</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
+        <!-- Spring Boot 3.3's class scanner cannot read Java 25 bytecode. Build/run on JDK 25,
+             but emit Java 21 bytecode, which supports all language features used here. -->
+        <maven.compiler.release>21</maven.compiler.release>
         <byte-buddy.version>1.18.10</byte-buddy.version>
     </properties>
 
@@ -83,6 +86,9 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <jvmArguments>-Xms128m -Xmx768m -XX:ActiveProcessorCount=4 -Xss512k</jvmArguments>
+                </configuration>
             </plugin>
         </plugins>
     </build>

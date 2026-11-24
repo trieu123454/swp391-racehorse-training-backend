@@ -7,4 +7,8 @@ public record ChangePasswordRequest(
         @NotBlank String currentPassword,
         @NotBlank @Size(min = 8, max = 100) String newPassword
 ) {
+    @Override
+    public String toString() {
+        return "ChangePasswordRequest[currentPassword=[REDACTED], newPassword=[REDACTED]]";
+    }
 }

@@ -12,7 +12,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN','HEAD_VETERINARIAN')")
 @io.swagger.v3.oas.annotations.tags.Tag(name="Veterinarian - Periodic care")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bearerAuth")
 public class CareScheduleController {
@@ -43,4 +43,17 @@ public class CareScheduleController {
     public Map<String,Object> complete(Principal p,HttpServletRequest r,@PathVariable UUID id,@RequestBody(required=false) JsonNode body) {
         return service.complete(p.getName(),r.getRemoteAddr(),id.toString(),body==null?JsonNodeFactory.instance.objectNode():body);
     }
+
+    @PatchMapping("/periodic-care-schedules/{id}/reassign")
+    @PreAuthorize("hasRole('HEAD_VETERINARIAN')")
+    public Map<String,Object> reassign(Principal p,HttpServletRequest r,@PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.reassign(p.getName(),r.getRemoteAddr(),id.toString(),body);
+    }
+
+    @GetMapping("/veterinarians")
+    @PreAuthorize("hasAnyRole('CLUB_MANAGER','VETERINARIAN','HEAD_VETERINARIAN')")
+    public List<Map<String, Object>> veterinarians() {
+        return service.listVeterinarians();
+    }
 }
+

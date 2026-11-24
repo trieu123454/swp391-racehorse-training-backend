@@ -20,6 +20,8 @@ import static org.springframework.http.HttpStatus.*;
 public class HorseStorage {
     private static final Logger log=LoggerFactory.getLogger(HorseStorage.class);
     private final String url,key,bucket;
+    @Autowired private CloudinaryHorseImages cloudinaryImages;
+    @Autowired private org.springframework.beans.factory.ObjectProvider<com.example.springbootbackend.horseowner.service.RegistrationStorage> registrationStorage;
     private final JdbcTemplate db;
     private final ObjectMapper json;
     private final VetTime time;
@@ -59,7 +61,11 @@ public class HorseStorage {
         throw new ResponseStatusException(BAD_REQUEST,"Nội dung file không phải ảnh JPG, PNG hoặc WebP");
     }
     public Map<String,Object> signedUrl(String path) {
-        if(path==null) return Map.of("hasImage",false);
+        if(path!=null && path.startsWith("horses/cloudinary/")) return cloudinaryImages.resolve(path);
+        if(path!=null && path.startsWith("registrations/"))
+            return Map.of("hasImage",true,"url",registrationStorage.getObject().signedUrl(path),"expiresIn",300);
+        if(path==null || path.isBlank()) return Map.of("hasImage",false);
+        if(path.startsWith("http://") || path.startsWith("https://")) return Map.of("hasImage",true,"url",path);
         if(!path.matches("(horses|incidents)/[0-9a-fA-F-]{36}\\.(jpg|png|webp)")) throw new ResponseStatusException(BAD_REQUEST,"Đường dẫn ảnh không hợp lệ");
         String response=send("/object/sign/"+bucket+"/"+path,"application/json","{\"expiresIn\":300}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         try {
@@ -75,6 +81,9 @@ public class HorseStorage {
                 .header("apikey",key).header("Content-Type",type).header("x-upsert","false")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(bytes)).build();
             var result=client.send(request,HttpResponse.BodyHandlers.ofString());
+            if(path.startsWith("/object/sign/") && (result.statusCode()==404
+                    || (result.statusCode()==400 && "404".equals(json.readTree(result.body()).path("statusCode").asText()))))
+                throw new ResponseStatusException(NOT_FOUND,"Horse image not found");
             if(result.statusCode()<200 || result.statusCode()>=300) throw new ResponseStatusException(BAD_GATEWAY,"Storage tạm thời không khả dụng, vui lòng thử lại");
             return result.body();
         } catch(InterruptedException e) { Thread.currentThread().interrupt(); throw new ResponseStatusException(SERVICE_UNAVAILABLE,"Upload bị gián đoạn"); }

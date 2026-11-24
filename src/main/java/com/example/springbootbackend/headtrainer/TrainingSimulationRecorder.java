@@ -17,15 +17,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(propagation = Propagation.MANDATORY)
 public class TrainingSimulationRecorder {
     private final JdbcTemplate db;
+    private final SimulationStorage storage;
     private final VetTime time;
     private final NotificationService notifications;
     private final int heartRateThreshold;
     private final BigDecimal speedThreshold;
 
-    public TrainingSimulationRecorder(JdbcTemplate db, VetTime time, NotificationService notifications,
+    public TrainingSimulationRecorder(JdbcTemplate db, SimulationStorage storage, VetTime time, NotificationService notifications,
             @Value("${app.head-trainer.injury-alert-heart-rate:220}") int heartRateThreshold,
             @Value("${app.head-trainer.injury-alert-speed-kmh:60}") BigDecimal speedThreshold) {
-        this.db = db; this.time = time; this.notifications = notifications;
+        this.storage=storage; this.db = db; this.time = time; this.notifications = notifications;
         this.heartRateThreshold = heartRateThreshold; this.speedThreshold = speedThreshold;
     }
 
@@ -63,12 +64,17 @@ public class TrainingSimulationRecorder {
         var horse = horses.getFirst();
         int duration = ((Number) session.get("duration_seconds")).intValue();
         int cadence = RaceSimulationFormula.cadence(duration);
-        var previousRows = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds DESC LIMIT 1", VetRows.MAPPER, id);
-        Map<String,Object> previous = previousRows.isEmpty() ? null : previousRows.getFirst();
+        var previousRows = storage.readings(id);
+        Map<String,Object> previous = previousRows.isEmpty() ? null : previousRows.getLast();
         int next = previous == null ? 0 : ((Number) previous.get("elapsed_seconds")).intValue() + cadence;
-        for (int second = next; second <= elapsed; second += cadence) previous = save(session, horse, previous, second);
-        if (terminal && (previous == null || number(previous,"elapsed_seconds") < elapsed)) save(session, horse, previous, elapsed);
-        var readings = db.query("SELECT * FROM training_simulation_readings WHERE simulation_id=? ORDER BY elapsed_seconds", VetRows.MAPPER, id);
+        var added = new ArrayList<Map<String,Object>>();
+        for (int second = next; second <= elapsed; second += cadence) {
+            previous = save(session, horse, previous, second);
+            added.add(previous);
+        }
+        if (terminal && (previous == null || number(previous,"elapsed_seconds") < elapsed)) added.add(save(session, horse, previous, elapsed));
+        storage.appendAll(id,added);
+        var readings = storage.readings(id);
         if (readings.stream().anyMatch(this::exceedsThreshold)) notifyOnce(id, horse.get("horse_id").toString());
         return readings;
     }
@@ -85,14 +91,13 @@ public class TrainingSimulationRecorder {
         int systolic = (int) Math.round(number(horse,"base_bp_systolic") + 40 * RaceSimulationFormula.clamp(speed/60,0,1));
         int diastolic = (int) Math.round(number(horse,"base_bp_diastolic") + (RaceSimulationFormula.noise(seed,p,0x1b873593)-0.5)*6);
         BigDecimal savedSpeed = decimal(speed,3);
-        db.update("INSERT INTO training_simulation_readings(simulation_id,elapsed_seconds,speed_kmh,heart_rate,bp_systolic,bp_diastolic) VALUES (?,?,?,?,?,?)",
-                id,second,savedSpeed,hr,systolic,diastolic);
-        return Map.of("elapsed_seconds",second,"speed_kmh",savedSpeed,"heart_rate",hr,"bp_systolic",systolic,"bp_diastolic",diastolic);
+        var reading = Map.<String,Object>of("elapsed_seconds",second,"speed_kmh",savedSpeed,"heart_rate",hr,"bp_systolic",systolic,"bp_diastolic",diastolic);
+        return reading;
     }
 
     public void summarize(Map<String,Object> session, int elapsed) {
         String id = session.get("id").toString();
-        if (!db.query("SELECT id FROM race_simulation_metrics WHERE simulation_id=?",VetRows.MAPPER,id).isEmpty()) return;
+        if (!db.query("SELECT simulation_id FROM " + storage.resultsTable() + " m WHERE simulation_id=? AND " + storage.recordedPredicate("m") + "",VetRows.MAPPER,id).isEmpty()) return;
         var readings = capture(session,elapsed,true);
         if (readings.isEmpty()) return;
         var horse = db.query("SELECT * FROM race_simulation_horses WHERE simulation_id=?",VetRows.MAPPER,id).getFirst();
@@ -119,8 +124,13 @@ public class TrainingSimulationRecorder {
         Object recordedAt = VetRows.sqlValue((Instant)session.get("stopped_at"));
         db.update("UPDATE race_simulations SET actual_distance_meters=?,recovery_heart_rate=?,stamina_score=? WHERE id=?",
                 decimal(distance,2),recoveryHr,stamina,id);
+        if (storage.consolidated()) {
+            db.update("UPDATE race_simulation_horses SET metric_id=?,finish_time_seconds=?,avg_speed_kmh=?,max_heart_rate=?,max_bp_systolic=?,max_bp_diastolic=?,rank=?,has_injury_alert=?,metric_created_at=? WHERE simulation_id=? AND horse_id=?",
+                    metricId,decimal(elapsed,2),average,maxHr,maxSys,maxDia,completed?1:null,alert,recordedAt,id,horse.get("horse_id"));
+        } else {
         db.update("INSERT INTO race_simulation_metrics(id,simulation_id,horse_id,lane,finish_time_seconds,avg_speed_kmh,max_heart_rate,max_bp_systolic,max_bp_diastolic,rank,has_injury_alert,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 metricId,id,horse.get("horse_id"),horse.get("lane"),decimal(elapsed,2),average,maxHr,maxSys,maxDia,completed?1:null,alert,recordedAt);
+        }
         db.update("INSERT INTO training_metrics_logs(id,horse_id,training_schedule_id,recorded_by,body_weight_kg,max_heart_rate,avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,bp_diastolic,is_simulated,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,TRUE,?)",
                 metricId,horse.get("horse_id"),session.get("training_schedule_id"),session.get("created_by"),horse.get("body_weight_kg"),
                 maxHr,average,stamina,alert,completed ? "Training sensor simulation; recovery score is a model estimate"

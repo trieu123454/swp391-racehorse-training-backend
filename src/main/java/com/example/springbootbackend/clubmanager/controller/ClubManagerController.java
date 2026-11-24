@@ -27,9 +27,26 @@ import java.util.UUID;
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class ClubManagerController {
     private final ClubManagerService service;
+    private final com.example.springbootbackend.clubmanager.service.HorseRegistrationReviewService registrations;
 
-    public ClubManagerController(ClubManagerService service) {
+    public ClubManagerController(ClubManagerService service, com.example.springbootbackend.clubmanager.service.HorseRegistrationReviewService registrations) {
         this.service = service;
+        this.registrations = registrations;
+    }
+
+    @GetMapping("/horse-registration-requests")
+    @io.swagger.v3.oas.annotations.Operation(summary="List horse registration requests awaiting review",
+        description="Returns a JSON array of requests with owner details, signed image/document URLs and history arrays; returns [] when empty. Defaults to PENDING and NEEDS_INFORMATION; status may filter to one of these states.")
+    public List<Map<String,Object>> horseRegistrations(Principal principal,@RequestParam(required=false) String status) {
+        return registrations.list(principal.getName(),status);
+    }
+
+    @PatchMapping(value="/horse-registration-requests/{id}",consumes="application/json")
+    @io.swagger.v3.oas.annotations.Operation(summary="Review a horse registration",
+        description="APPROVE creates a REGISTER horse (stableBoxId required) or links a LINK horse (horseId required). REQUEST_INFORMATION and REJECT require reviewNote. Final decisions cannot be repeated. History, ownership and notifications are committed atomically.")
+    public Map<String,Object> reviewHorseRegistration(Principal principal,@PathVariable UUID id,
+            @Valid @RequestBody com.example.springbootbackend.clubmanager.dto.ReviewHorseRegistrationRequest input) {
+        return registrations.review(principal.getName(),id,input);
     }
 
     @GetMapping("/users/pending")
@@ -126,6 +143,11 @@ public class ClubManagerController {
     @GetMapping("/supply-requests")
     public Map<String,Object> supplyRequests(Principal principal,@RequestParam(defaultValue="Pending") String status) {
         return service.supplyRequests(principal.getName(),status);
+    }
+
+    @GetMapping("/inventory-transactions")
+    public Map<String,Object> inventoryTransactions(Principal principal,@RequestParam(defaultValue="100") int limit) {
+        return service.inventoryTransactions(principal.getName(),limit);
     }
 
     @PatchMapping("/supply-requests/{id}")

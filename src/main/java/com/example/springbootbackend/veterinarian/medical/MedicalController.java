@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api")
-@PreAuthorize("hasRole('VETERINARIAN')")
+@PreAuthorize("hasAnyRole('VETERINARIAN','HEAD_VETERINARIAN')")
 @io.swagger.v3.oas.annotations.tags.Tag(name="Veterinarian - Medical records, prescriptions, diets and injuries")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bearerAuth")
 public class MedicalController {
@@ -62,6 +62,10 @@ public class MedicalController {
     @PostMapping("/horses/{horseId}/injury-markers") @ResponseStatus(HttpStatus.CREATED)
     public Map<String,Object> injury(Principal p,HttpServletRequest r,@PathVariable UUID horseId,@RequestBody JsonNode body) {
         return service.createInjury(p.getName(),r.getRemoteAddr(),horseId.toString(),body);
+    }
+    @PatchMapping("/injury-markers/{id}")
+    public Map<String,Object> followUpInjury(Principal p,HttpServletRequest r,@PathVariable UUID id,@RequestBody JsonNode body) {
+        return service.appendInjury(p.getName(),r.getRemoteAddr(),id.toString(),body);
     }
     @GetMapping("/horses/{horseId}/injury-markers")
     public Map<String,Object> injuries(Principal p,@PathVariable UUID horseId,

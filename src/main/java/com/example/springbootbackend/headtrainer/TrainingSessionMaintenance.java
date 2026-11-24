@@ -17,15 +17,16 @@ import org.springframework.context.annotation.Profile;
 public class TrainingSessionMaintenance {
     private static final Logger log=LoggerFactory.getLogger(TrainingSessionMaintenance.class);
     private final JdbcTemplate db;
+    private final SimulationStorage storage;
     private final RaceSimulationService simulations;
     private final VetTime time;
-    public TrainingSessionMaintenance(JdbcTemplate db,RaceSimulationService simulations,VetTime time) {
-        this.db=db; this.simulations=simulations; this.time=time;
+    public TrainingSessionMaintenance(JdbcTemplate db,SimulationStorage storage,RaceSimulationService simulations,VetTime time) {
+        this.storage=storage; this.db=db; this.simulations=simulations; this.time=time;
     }
     @Scheduled(fixedDelayString="${app.head-trainer.session-maintenance-ms:15000}",initialDelay=15000)
     public void tick() {
         var running=db.query("SELECT rs.id FROM race_simulations rs WHERE rs.model_version>=2 AND (rs.status='Running'"
-                + " OR (rs.status='Interrupted' AND NOT EXISTS (SELECT 1 FROM race_simulation_metrics m WHERE m.simulation_id=rs.id)))",VetRows.MAPPER);
+                + " OR (rs.status='Interrupted' AND NOT EXISTS (SELECT 1 FROM " + storage.resultsTable() + " m WHERE m.simulation_id=rs.id AND " + storage.recordedPredicate("m") + ")))",VetRows.MAPPER);
         for(var row:running) {
             try { simulations.advance(UUID.fromString(row.get("id").toString())); }
             catch(RuntimeException failure) { log.warn("Cannot update training simulation {}: {}",row.get("id"),failure.getMessage()); }

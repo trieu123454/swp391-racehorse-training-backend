@@ -33,7 +33,7 @@ public class HealthExamService {
 
     @Transactional
     public Map<String, Object> create(String email, String ip, UUID horseId, JsonNode body) {
-        long doctor = access.requireRole(email, "VETERINARIAN");
+        long doctor = access.requireVeterinarian(email);
         access.requireHorse(horseId.toString(), true);
         Map<String, Object> data = ExamInput.parse(body);
         data.putIfAbsent("exam_date", time.now());
@@ -55,7 +55,7 @@ public class HealthExamService {
     }
 
     public Map<String, Object> list(String email, UUID horseId, LocalDate from, LocalDate to, ApiPage page) {
-        access.requireRole(email, "VETERINARIAN");
+        access.requireVeterinarian(email);
         access.requireHorse(horseId.toString(), false);
         if (from != null && to != null && from.isAfter(to)) throw VetException.invalid("to", "Phải >= from");
         List<Object> args = new ArrayList<>(); args.add(horseId.toString());
@@ -80,12 +80,12 @@ public class HealthExamService {
     }
 
     public Map<String, Object> detail(String email, UUID id) {
-        access.requireRole(email, "VETERINARIAN");
+        access.requireVeterinarian(email);
         return detailRecord(id.toString());
     }
 
     public Map<String, Object> logs(String email, UUID id, ApiPage page) {
-        access.requireRole(email, "VETERINARIAN");
+        access.requireVeterinarian(email);
         existing(id.toString(), false);
         var rows = db.query("SELECT l.*,u.full_name AS editor_name FROM health_exam_logs l "
                 + "LEFT JOIN users u ON u.user_id=l.edited_by WHERE l.health_exam_id=? "
@@ -109,7 +109,7 @@ public class HealthExamService {
 
     @Transactional
     public Map<String, Object> update(String email, String ip, UUID id, JsonNode body) {
-        long editor = access.requireRole(email, "VETERINARIAN");
+        long editor = access.requireVeterinarian(email);
         var old = existing(id.toString(), true);
         var patch = ExamInput.parse(body);
         Map<String, Object> merged = new LinkedHashMap<>(old); merged.putAll(patch);

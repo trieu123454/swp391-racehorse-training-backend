@@ -22,6 +22,12 @@ public class TrainingAnalysisService {
         LocalDate start=from==null ? end.minusDays(29) : from;
         if (end.isBefore(start) || Duration.between(start.atStartOfDay(),end.atStartOfDay()).toDays()>366)
             throw VetException.invalid("from","Khoang bao cao phai tu 0 den 366 ngay");
+        // V40 moved simulation results onto participant rows. Detect the schema,
+        // not query failures: missing tables or other SQL errors must still surface.
+        boolean consolidated=db.queryForObject("SELECT count(*) FROM information_schema.columns "
+                +"WHERE table_schema=current_schema() AND table_name='race_simulation_horses' "
+                +"AND column_name='metric_id'",Integer.class)>0;
+        String metricSource=consolidated ? "race_simulation_horses" : "race_simulation_metrics";
         var sessions=db.query("SELECT ts.*,ce.event_date,ce.start_time,ce.end_time,g.full_name AS groom_name,"
                 + "sim.id AS simulation_id,sim.status AS simulation_status,sim.stop_reason,sim.duration_seconds,"
                 + "sim.created_at AS simulation_started_at,sim.stopped_at,sim.actual_distance_meters,sim.recovery_heart_rate,sim.stamina_score AS estimated_stamina_score,"
@@ -31,7 +37,8 @@ public class TrainingAnalysisService {
                 + " LEFT JOIN race_simulations sim ON sim.training_schedule_id=ts.id AND sim.model_version>=2"
                 + " AND NOT EXISTS (SELECT 1 FROM race_simulations newer WHERE newer.training_schedule_id=sim.training_schedule_id"
                 + " AND (newer.created_at>sim.created_at OR (newer.created_at=sim.created_at AND newer.id>sim.id)))"
-                + " LEFT JOIN race_simulation_metrics m ON m.simulation_id=sim.id AND m.horse_id=ts.horse_id"
+                + " LEFT JOIN " + metricSource + " m ON m.simulation_id=sim.id AND m.horse_id=ts.horse_id"
+                + (consolidated ? " AND m.metric_id IS NOT NULL" : "")
                 + " WHERE ts.horse_id=? AND ce.event_date BETWEEN ? AND ? ORDER BY ce.event_date,ce.start_time,ts.id",VetRows.MAPPER,horseId.toString(),start,end);
         var plans=db.query("SELECT p.* FROM training_plans p JOIN training_plan_horses tph ON tph.training_plan_id=p.id"
                 + " WHERE tph.horse_id=? AND p.start_date<=? AND p.end_date>=?",VetRows.MAPPER,horseId.toString(),end,start);

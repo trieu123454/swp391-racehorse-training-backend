@@ -9,6 +9,8 @@ import com.example.springbootbackend.veterinarian.support.VetInput;
 import com.example.springbootbackend.veterinarian.support.VetTime;
 import com.example.springbootbackend.veterinarian.support.VetRows;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.example.springbootbackend.veterinarian.notification.NotificationService;
+import static com.example.springbootbackend.veterinarian.notification.NotificationContent.Type.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -38,11 +40,12 @@ public class ClubManagerService {
     private final JdbcTemplate db;
     private final PasswordEncoder passwordEncoder;
     private final VetTime time;
+    private final NotificationService notifications;
 
-    public ClubManagerService(JdbcTemplate db, PasswordEncoder passwordEncoder, VetTime time) {
+    public ClubManagerService(JdbcTemplate db, PasswordEncoder passwordEncoder, VetTime time, NotificationService notifications) {
         this.db = db;
         this.passwordEncoder = passwordEncoder;
-        this.time = time;
+        this.time = time; this.notifications=notifications;
     }
 
     @Transactional
@@ -145,7 +148,7 @@ public class ClubManagerService {
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='APPROVED', approved_by=?, approved_at=?, updated_at=? WHERE user_id=? AND status='PENDING'",
                 managerId, now, now, userId);
-        notifyUser(userId, "Tài khoản của bạn đã được Club Manager phê duyệt.");
+        notifyAccount(userId,ACCOUNT_APPROVED,Map.of());
         audit(managerId, "APPROVE_USER: " + userId);
         return new UserApprovalResponse(userId, "APPROVED", managerId, now);
     }
@@ -161,7 +164,7 @@ public class ClubManagerService {
         String message = StringUtils.hasText(reason)
                 ? "Tài khoản bị từ chối. Lý do: " + reason.trim()
                 : "Tài khoản của bạn đã bị từ chối bởi Club Manager.";
-        notifyUser(userId, message);
+        notifyAccount(userId,ACCOUNT_REJECTED,StringUtils.hasText(reason)?Map.of("reason",reason.trim()):Map.of());
         audit(managerId, "REJECT_USER: " + userId + (StringUtils.hasText(reason) ? " - " + reason.trim() : ""));
         return Map.of("id", userId, "status", "REJECTED");
     }
@@ -202,10 +205,10 @@ public class ClubManagerService {
                 assertNoUpcomingGroomAssignments(userId);
             db.update("UPDATE users SET role_id=?, updated_at=? WHERE user_id=?", request.get("requested_role_id"), now, userId);
             db.update("UPDATE role_change_requests SET status='Approved',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
-            notifyUser(userId, "Yêu cầu đổi vai trò của bạn đã được phê duyệt.");
+            notifyAccount(userId,ROLE_CHANGED,Map.of("old_role",currentRole,"new_role",requestedRole));
         } else {
             db.update("UPDATE role_change_requests SET status='Rejected',reviewed_by=?,reviewed_at=? WHERE id=?", managerId, now, requestId);
-            notifyUser(userId, "Yêu cầu đổi vai trò của bạn đã bị từ chối.");
+            notifyAccount(userId,ROLE_REJECTED,Map.of());
         }
         audit(managerId, (normalizedAction.equals("approve") ? "APPROVE_ROLE_CHANGE: " : "REJECT_ROLE_CHANGE: ") + requestId);
         return Map.of("id", requestId, "status", normalizedAction.equals("approve") ? "Approved" : "Rejected", "reviewed_by", managerId, "reviewed_at", now);
@@ -227,8 +230,7 @@ public class ClubManagerService {
         if ("GROOM".equals(targetRole)) assertNoUpcomingGroomAssignments(userId);
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='LOCKED', updated_at=? WHERE user_id=? AND status='APPROVED'", now, userId);
-        String message = StringUtils.hasText(reason) ? "Tài khoản đã bị khóa. Lý do: " + reason.trim() : "Tài khoản của bạn đã bị khóa.";
-        notifyUser(userId, message);
+        notifyAccount(userId,ACCOUNT_LOCKED,StringUtils.hasText(reason)?Map.of("reason",reason.trim()):Map.of());
         audit(managerId, "LOCK_USER: " + userId + (StringUtils.hasText(reason) ? " - " + reason.trim() : ""));
         return Map.of("id", userId, "status", "LOCKED");
     }
@@ -248,7 +250,7 @@ public class ClubManagerService {
 
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET status='APPROVED', updated_at=? WHERE user_id=? AND status='LOCKED'", now, userId);
-        notifyUser(userId, "Tài khoản của bạn đã được Club Manager mở khóa. Bạn có thể đăng nhập lại.");
+        notifyAccount(userId,ACCOUNT_UNLOCKED,Map.of());
         audit(managerId, "UNLOCK_USER: " + userId);
         return Map.of("id", userId, "status", "APPROVED");
     }
@@ -280,7 +282,7 @@ public class ClubManagerService {
         Integer targetRoleId = db.queryForObject("SELECT role_id FROM roles WHERE role_name=?", Integer.class, normalizedRole);
         LocalDateTime now = time.utcNow();
         db.update("UPDATE users SET role_id=?,updated_at=? WHERE user_id=? AND status='APPROVED'", targetRoleId, now, userId);
-        notifyUser(userId, "Vai trò của bạn đã được Club Manager đổi từ " + currentRole + " sang " + normalizedRole + ". Vui lòng đăng nhập lại để áp dụng quyền mới.");
+        notifyAccount(userId,ROLE_CHANGED,Map.of("old_role",currentRole,"new_role",normalizedRole));
         audit(managerId, "UPDATE_USER_ROLE: " + userId + " " + currentRole + " -> " + normalizedRole);
         return Map.of("id", userId, "previous_role", currentRole, "role_name", normalizedRole);
     }
@@ -436,15 +438,26 @@ public class ClubManagerService {
         }
     }
 
+    public Map<String,Object> inventoryTransactions(String email,int limit) {
+        requireManager(email);
+        if(limit<1 || limit>1000) throw new ResponseStatusException(BAD_REQUEST,"limit must be between 1 and 1000");
+        var rows=db.query("SELECT t.*,i.item_code,i.item_name,l.lot_number,l.expiry_date,u.full_name AS actor_name "
+                +"FROM inventory_transactions t JOIN inventory_items i ON i.id=t.item_id "
+                +"LEFT JOIN inventory_lots l ON l.id=t.lot_id LEFT JOIN users u ON u.user_id=t.actor_id "
+                +"ORDER BY t.created_at DESC,t.id DESC LIMIT ?",VetRows.MAPPER,limit);
+        return Map.of("data",rows);
+    }
+
     public Map<String,Object> supplyRequests(String managerEmail,String status) {
         requireManager(managerEmail);
         String selected=StringUtils.hasText(status)?status.trim():"Pending";
-        if(!List.of("Pending","Approved","Rejected").contains(selected))
-            throw new ResponseStatusException(BAD_REQUEST,"status must be Pending, Approved or Rejected");
-        var rows=db.query("SELECT r.id,r.requested_by,u.full_name AS groom_name,i.id AS item_id,i.item_name,"
-                +"r.quantity_requested,r.reason,r.status,r.reviewed_by,r.created_at,r.reviewed_at "
+        if(!List.of("Pending","Approved","PartiallyApproved","Rejected","All").contains(selected))
+            throw new ResponseStatusException(BAD_REQUEST,"status must be Pending, Approved, PartiallyApproved, Rejected or All");
+        var rows=db.query("SELECT r.*,u.full_name AS groom_name,i.item_name,i.item_code "
                 +"FROM supply_requests r JOIN inventory_items i ON i.id=r.item_id "
-                +"LEFT JOIN users u ON u.user_id=r.requested_by WHERE r.status=? ORDER BY r.created_at,r.id",VetRows.MAPPER,selected);
+                +"LEFT JOIN users u ON u.user_id=r.requested_by "
+                +("All".equals(selected)?"":"WHERE r.status=? ")+"ORDER BY r.created_at,r.id",VetRows.MAPPER,
+                "All".equals(selected)?new Object[0]:new Object[]{selected});
         return Map.of("data",rows,"status",selected);
     }
 
@@ -461,7 +474,7 @@ public class ClubManagerService {
         String status="Approve".equals(action)?"Approved":"Rejected";
         LocalDateTime now=time.utcNow();
         db.update("UPDATE supply_requests SET status=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,managerId,now,id);
-        notifyUser(((Number)request.get("requested_by")).longValue(),"Your supply request was "+status.toLowerCase(Locale.ROOT)+".");
+        notifyRelated(((Number)request.get("requested_by")).longValue(),"Supply_Requests",id,"Your supply request was "+status.toLowerCase(Locale.ROOT)+".");
         audit(managerId,"REVIEW_SUPPLY_REQUEST: "+id+" "+status,ip);
         return db.query("SELECT r.id,r.requested_by,u.full_name AS groom_name,i.id AS item_id,i.item_name,"
                 +"r.quantity_requested,r.reason,r.status,r.reviewed_by,r.created_at,r.reviewed_at "
@@ -511,7 +524,7 @@ public class ClubManagerService {
         db.update("INSERT INTO daily_task_logs(id,calendar_event_id,horse_id,groom_id,assigned_by,task_type,status) "
                 +"VALUES (?,?,?,?,?,?,'Pending')",id,eventId,horseId,groomId,managerId,taskType);
         audit(managerId,"ASSIGN_GROOM_TASK: "+id+" to "+groomId,ip);
-        notifyUser(groomId,taskType+" task assigned for "+taskDate+".");
+        notifyRelated(groomId,"Daily_Task_Logs",id,taskType+" task assigned for "+taskDate+".");
         return db.query("SELECT t.id,t.horse_id,h.horse_name,t.groom_id,u.full_name AS groom_name,t.task_type,ce.event_date AS task_date,t.status "
                 +"FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id JOIN horses h ON h.id=t.horse_id "
                 +"LEFT JOIN users u ON u.user_id=t.groom_id WHERE t.id=?",VetRows.MAPPER,id).getFirst();
@@ -544,7 +557,7 @@ public class ClubManagerService {
                 throw VetException.invalid("action","Use Cancel alone, or send groom_id to reassign");
             db.update("UPDATE daily_task_logs SET status='Cancelled' WHERE id=?",id);
             db.update("UPDATE calendar_events SET status='Cancelled' WHERE id=?",task.get("event_id"));
-            if(previousGroom!=null) notifyUser(previousGroom,"A care task scheduled for "+task.get("event_date")+" was cancelled.");
+            if(previousGroom!=null) notifyRelated(previousGroom,"Daily_Task_Logs",id,"A care task scheduled for "+task.get("event_date")+" was cancelled.");
             audit(managerId,"CANCEL_GROOM_TASK: "+id,ip);
         } else {
             VetInput.required(fields,"groom_id");
@@ -555,8 +568,8 @@ public class ClubManagerService {
             if(grooms.isEmpty()) throw VetException.invalid("groom_id","Groom account is not active");
             db.update("UPDATE daily_task_logs SET groom_id=?,assigned_by=? WHERE id=?",groomId,managerId,id);
             if(previousGroom!=null && previousGroom!=groomId)
-                notifyUser(previousGroom,"A care task scheduled for "+task.get("event_date")+" was reassigned.");
-            notifyUser(groomId,"A care task was assigned for "+task.get("event_date")+".");
+                notifyRelated(previousGroom,"Daily_Task_Logs",id,"A care task scheduled for "+task.get("event_date")+" was reassigned.");
+            notifyRelated(groomId,"Daily_Task_Logs",id,"A care task was assigned for "+task.get("event_date")+".");
             audit(managerId,"REASSIGN_GROOM_TASK: "+id+" to "+groomId,ip);
         }
         return db.query("SELECT t.id,t.horse_id,h.horse_name,t.groom_id,u.full_name AS groom_name,t.task_type,"
@@ -624,10 +637,10 @@ public class ClubManagerService {
                 assigneeId,role,fields.get("assignment_note"),managerId,time.utcNow(),managerId,id);
         String horse=(String)incident.get("horse_name");
         String msg="Incident for "+horse+" assigned to you. Instructions: "+fields.get("assignment_note");
-        notifyUser(assigneeId,msg);
-        if(previous instanceof Number old && old.longValue()!=assigneeId) notifyUser(old.longValue(),"Incident for "+horse+" was reassigned.");
+        notifyRelated(assigneeId,"Stable_Incidents",id,msg);
+        if(previous instanceof Number old && old.longValue()!=assigneeId) notifyRelated(old.longValue(),"Stable_Incidents",id,"Incident for "+horse+" was reassigned.");
         if(incident.get("groom_id") instanceof Number reporter && reporter.longValue()!=assigneeId)
-            notifyUser(reporter.longValue(),"Incident for "+horse+" is assigned to "+role+". Instructions: "+fields.get("assignment_note"));
+            notifyRelated(reporter.longValue(),"Stable_Incidents",id,"Incident for "+horse+" is assigned to "+role+". Instructions: "+fields.get("assignment_note"));
         audit(managerId,"ASSIGN_STABLE_INCIDENT: "+id+" to "+role+":"+assigneeId,ip);
         return Map.of("id",id,"status","InProgress","assigned_to",assigneeId,"assigned_role",role,
                 "assignment_note",fields.get("assignment_note"));
@@ -648,7 +661,7 @@ public class ClubManagerService {
                 fields.get("result_note"),managerId,time.utcNow(),id);
         audit(managerId,"SUBMIT_STABLE_INCIDENT_RESULT: "+id,ip);
         Object reporter=incident.get("groom_id");
-        if(reporter instanceof Number recipient) notifyUser(recipient.longValue(),"A result was recorded for the incident on "+incident.get("horse_name")+".");
+        if(reporter instanceof Number recipient) notifyRelated(recipient.longValue(),"Stable_Incidents",id,"A result was recorded for the incident on "+incident.get("horse_name")+".");
         return Map.of("id",id,"status","AwaitingClosure","result_note",fields.get("result_note"));
     }
 
@@ -663,10 +676,10 @@ public class ClubManagerService {
         db.update("UPDATE stable_incidents SET status='Resolved',reviewed_by=?,resolved_at=? WHERE id=?",managerId,time.utcNow(),id);
         Object groomId=rows.getFirst().get("groom_id");
         if(groomId instanceof Number recipient)
-            notifyUser(recipient.longValue(),"Your incident report for "+rows.getFirst().get("horse_name")+" has been resolved.");
+            notifyRelated(recipient.longValue(),"Stable_Incidents",id,"Your incident report for "+rows.getFirst().get("horse_name")+" has been resolved.");
         Object assignee=rows.getFirst().get("assigned_to");
         if(assignee instanceof Number recipient && (!(groomId instanceof Number reporter) || reporter.longValue()!=recipient.longValue()))
-            notifyUser(recipient.longValue(),"The incident assigned to you has been closed.");
+            notifyRelated(recipient.longValue(),"Stable_Incidents",id,"The incident assigned to you has been closed.");
         audit(managerId,"RESOLVE_STABLE_INCIDENT: "+id,ip);
         return Map.of("id",id,"status","Resolved");
     }
@@ -739,9 +752,11 @@ public class ClubManagerService {
         return normalized;
     }
 
-    private void notifyUser(Long userId, String message) {
-        db.update("INSERT INTO notifications(id,user_id,related_table,related_id,message,is_read,created_at) VALUES (?,?,?,?,?,FALSE,?)",
-                UUID.randomUUID().toString(), userId, "users", String.valueOf(userId), message, time.utcNow());
+    private void notifyAccount(Long userId,com.example.springbootbackend.veterinarian.notification.NotificationContent.Type type,Map<String,?> params) {
+        notifications.schedule(userId,"users",String.valueOf(userId),type,params,time.now());
+    }
+    private void notifyRelated(long userId,String table,String id,String message) {
+        notifications.schedule(userId,table,id,message,time.now());
     }
 
     private void audit(long managerId, String action) {

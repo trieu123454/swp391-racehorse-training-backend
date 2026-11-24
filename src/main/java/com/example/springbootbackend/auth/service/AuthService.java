@@ -153,7 +153,7 @@ public class AuthService {
 
         ensureApproved(refreshToken.getUser());
         refreshToken.revoke();
-        return createAuthResponse(refreshToken.getUser());
+        return createAuthResponse(refreshToken.getUser(), refreshToken.getSessionId());
     }
 
     @Transactional
@@ -182,11 +182,16 @@ public class AuthService {
     }
 
     private AuthResponse createAuthResponse(AppUser user) {
+        return createAuthResponse(user, UUID.randomUUID().toString());
+    }
+
+    private AuthResponse createAuthResponse(AppUser user, String sessionId) {
         String accessToken = jwtService.createAccessToken(user);
         String refreshTokenValue = UUID.randomUUID().toString() + UUID.randomUUID();
         RefreshToken refreshToken = new RefreshToken(
                 user,
                 refreshTokenValue,
+                sessionId,
                 LocalDateTime.now().plusDays(jwtProperties.refreshTokenDays())
         );
         refreshTokenRepository.save(refreshToken);

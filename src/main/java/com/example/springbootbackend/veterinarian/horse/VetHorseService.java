@@ -21,7 +21,7 @@ public class VetHorseService {
         this.data=data; this.access=access; this.audit=audit; this.time=time; this.notifications=notifications; this.simulationRecorder=simulationRecorder;
     }
     public Map<String,Object> overview(String email,String section) {
-        access.requireRole(email, "VETERINARIAN");
+        access.requireVeterinarian(email);
         String query="SELECT h.id,h.horse_name,h.image_url,h.current_status,h.readiness_status,h.is_training_locked,h.lock_level,h.lock_reason,"
                 +"s.id AS box_id,s.box_code,s.section FROM horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id WHERE h.deleted_at IS NULL";
         var args=new ArrayList<Object>();
@@ -39,7 +39,7 @@ public class VetHorseService {
         return Map.of("counts",counts,"horses",rows);
     }
     public Map<String,Object> incidents(String email,String requestedStatus) {
-        long vetId=access.requireRole(email, "VETERINARIAN");
+        long vetId=access.requireVeterinarian(email);
         String status=requestedStatus==null||requestedStatus.isBlank()?"Open":requestedStatus.trim();
         if(!List.of("Open","Pending","InProgress","AwaitingClosure","Resolved","All").contains(status))
             throw new VetException(400,"INVALID_STATUS","Unsupported incident status");
@@ -66,7 +66,7 @@ public class VetHorseService {
 
     @Transactional
     public Map<String,Object> claimEmergency(String email,String ip,UUID incidentId) {
-        long vetId=access.requireRole(email,"VETERINARIAN"); String id=incidentId.toString();
+        long vetId=access.requireVeterinarian(email); String id=incidentId.toString();
         var rows=data.db.query("SELECT i.id,i.status,i.is_emergency,i.assigned_to,i.groom_id,h.horse_name "
                 +"FROM stable_incidents i JOIN horses h ON h.id=i.horse_id WHERE i.id=? FOR UPDATE OF i",VetRows.MAPPER,id);
         if(rows.isEmpty()) throw new VetException(404,"INCIDENT_NOT_FOUND","Incident not found");
@@ -87,7 +87,7 @@ public class VetHorseService {
 
     @Transactional
     public Map<String,Object> submitIncidentResult(String email,String ip,UUID incidentId,JsonNode body) {
-        long vetId=access.requireRole(email,"VETERINARIAN");
+        long vetId=access.requireVeterinarian(email);
         var fields=VetInput.parse(body,"result_note:2000"); VetInput.required(fields,"result_note");
         String id=incidentId.toString();
         var rows=data.db.query("SELECT i.id,i.status,i.assigned_to,i.groom_id,h.horse_name FROM stable_incidents i "
@@ -108,7 +108,7 @@ public class VetHorseService {
     }
     @Transactional
     public Map<String,Object> status(String email,String ip,String horse,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var old=horse(horse,true);
+        long actor=access.requireVeterinarian(email); var old=horse(horse,true);
         var fields=VetInput.parse(body,"current_status:20","readiness_status:20","note:0");
         VetInput.choice(fields,"current_status","Healthy","Monitoring","Injured","Quarantine");
         String status=fields.get("current_status").toString();
@@ -152,7 +152,7 @@ public class VetHorseService {
     }
     @Transactional
     public Map<String,Object> lock(String email,String ip,String horse,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var old=horse(horse,true);
+        long actor=access.requireVeterinarian(email); var old=horse(horse,true);
         var fields=VetInput.parse(body,"lock_level:20","lock_reason:255");
         VetInput.choice(fields,"lock_level","Warning","Critical"); VetInput.required(fields,"lock_reason");
         boolean wasLocked=Boolean.TRUE.equals(old.get("is_training_locked"));
@@ -169,7 +169,7 @@ public class VetHorseService {
     }
     @Transactional
     public Map<String,Object> unlock(String email,String ip,String horse,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var old=horse(horse,true);
+        long actor=access.requireVeterinarian(email); var old=horse(horse,true);
         var fields=VetInput.parse(body,"reason:0"); VetInput.required(fields,"reason");
         if(!Boolean.TRUE.equals(old.get("is_training_locked"))) throw new VetException(409,"NOT_LOCKED","Ngựa chưa bị khóa huấn luyện");
         if(List.of("Injured","Quarantine").contains(old.get("current_status")))

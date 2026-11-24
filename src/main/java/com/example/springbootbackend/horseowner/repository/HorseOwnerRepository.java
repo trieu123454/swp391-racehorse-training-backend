@@ -88,6 +88,20 @@ public class HorseOwnerRepository {
     }
 
     public List<Map<String, Object>> findTrainingVideos(String horseId) {
+        boolean consolidated=db.queryForObject("SELECT count(*) FROM information_schema.columns "
+                +"WHERE table_schema=current_schema() AND table_name='training_schedules' "
+                +"AND column_name='video_url'",Integer.class)>0;
+        if(consolidated) {
+            return db.queryForList("""
+                    SELECT ts.video_id AS id,ts.id AS training_schedule_id,ts.video_url,
+                           ts.video_description AS description,ts.video_uploaded_at AS uploaded_at,
+                           u.full_name AS uploaded_by_name,ts.session_type
+                    FROM training_schedules ts
+                    LEFT JOIN users u ON u.user_id=ts.video_uploaded_by
+                    WHERE ts.horse_id=? AND ts.video_url IS NOT NULL AND TRIM(ts.video_url)<>''
+                    ORDER BY ts.video_uploaded_at DESC NULLS LAST,ts.video_id DESC,ts.id DESC
+                    """,horseId);
+        }
         return db.queryForList("""
                 SELECT v.id,v.training_schedule_id,v.video_url,v.description,v.uploaded_at,
                        u.full_name AS uploaded_by_name,ts.session_type

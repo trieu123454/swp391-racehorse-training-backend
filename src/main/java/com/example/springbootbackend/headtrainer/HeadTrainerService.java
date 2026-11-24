@@ -64,6 +64,16 @@ public class HeadTrainerService {
         this.injuryAlertSpeed = injuryAlertSpeed;
     }
 
+    public Map<String,Object> dietRecords(String email) {
+        requireTrainer(email);
+        var rows=db.query("SELECT d.*,h.horse_name,u.full_name AS doctor_name "
+                +"FROM diet_records d JOIN horses h ON h.id=d.horse_id "
+                +"LEFT JOIN users u ON u.user_id=d.doctor_id "
+                +"WHERE h.deleted_at IS NULL "
+                +"ORDER BY d.effective_date DESC NULLS LAST,d.id DESC",VetRows.MAPPER);
+        return Map.of("data",rows);
+    }
+
     public Map<String,Object> stableIncidents(String email) {
         long trainerId = requireTrainer(email);
         var rows = db.query("SELECT i.id,i.horse_id,h.horse_name,i.groom_id,g.full_name AS groom_name,"

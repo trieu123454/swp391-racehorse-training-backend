@@ -36,7 +36,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> create(String email,String ip,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN");
+        long actor=access.requireVeterinarian(email);
         var fields=VetInput.parse(body,"horse_id:uuid","care_type:30","frequency_days:int","last_done_date:date","next_due_date:date",
                 "assigned_doctor_id:long","notes:0","book_event:bool","start_time:time","end_time:time");
         VetInput.required(fields,"horse_id"); VetInput.choice(fields,"care_type","HoofCheck","Deworming","Vaccination","MedicalCheckup");
@@ -63,8 +63,42 @@ public class CareScheduleService {
     }
 
     @Transactional
+    public Map<String,Object> reassign(String email,String ip,String id,JsonNode body) {
+        long actor=access.requireRole(email,"HEAD_VETERINARIAN");
+        var fields=VetInput.parse(body,"assigned_doctor_id:long");
+        VetInput.required(fields,"assigned_doctor_id");
+        long target=((Number)fields.get("assigned_doctor_id")).longValue();
+        var snapshot=data.row("periodic_care_schedules",id,false);
+        long previous=doctor(snapshot);
+        // All reassignment transactions lock doctor IDs in the same order.
+        var doctorIds=new TreeSet<Long>(); doctorIds.add(target);
+        if(previous>=0) doctorIds.add(previous);
+        for(long doctorId:doctorIds) lockDoctor(doctorId,doctorId==target);
+        Boolean passwordChange=data.db.queryForObject("SELECT must_change_password FROM users WHERE user_id=?",Boolean.class,target);
+        if(Boolean.TRUE.equals(passwordChange)) throw VetException.invalid("assigned_doctor_id","Doctor must complete account activation first");
+        var schedule=data.row("periodic_care_schedules",id,true);
+        if(doctor(schedule)!=previous) throw new VetException(409,"ASSIGNMENT_CHANGED","Assignment changed; reload before retrying");
+        if(target==previous) return response(id);
+        var current=event(schedule.get("calendar_event_id"));
+        if(current!=null && "Scheduled".equals(current.get("status"))) {
+            requireNoConflicts(horse(schedule),target,(LocalDate)current.get("event_date"),
+                    (LocalTime)current.get("start_time"),(LocalTime)current.get("end_time"),current.get("id").toString());
+        }
+        data.update("periodic_care_schedules",id,Map.of("assigned_doctor_id",target));
+        schedule.put("assigned_doctor_id",target);
+        if(current!=null && "Scheduled".equals(current.get("status"))) {
+            // Preserve read history; retire the old doctor's outstanding reminders.
+            data.db.update("UPDATE notifications SET is_read=TRUE WHERE related_table='Calendar_Events' AND related_id=? AND user_id=? AND is_read=FALSE",
+                    current.get("id"),previous);
+            reminder(schedule,current);
+        }
+        audit.record(actor,ip,"REASSIGN_CARE_SCHEDULE:"+id+":"+previous+"->"+target);
+        return response(id);
+    }
+
+    @Transactional
     public Map<String,Object> book(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id);
+        long actor=access.requireVeterinarian(email); var schedule=lockedSchedule(id);
         if(schedule.get("calendar_event_id")!=null) throw new VetException(409,"EVENT_ALREADY_BOOKED","Quy tắc đã có sự kiện");
         var fields=VetInput.parse(body,"event_date:date","start_time:time","end_time:time");
         fields.putIfAbsent("event_date",schedule.get("next_due_date")); VetInput.required(fields,"event_date");
@@ -78,7 +112,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> move(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
+        long actor=access.requireVeterinarian(email); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
         var fields=VetInput.parse(body,"event_date:date","start_time:time","end_time:time");
         var merged=new LinkedHashMap<>(current); merged.putAll(fields);
         VetInput.required(merged,"event_date"); LocalDate date=(LocalDate)merged.get("event_date");
@@ -92,7 +126,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> cancel(String email,String ip,String id) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
+        long actor=access.requireVeterinarian(email); var schedule=lockedSchedule(id); var current=scheduledEvent(schedule);
         String eventId=current.get("id").toString();
         data.update("calendar_events",eventId,Map.of("status","Cancelled")); removeFutureReminders(eventId);
         data.db.update("UPDATE periodic_care_schedules SET calendar_event_id=NULL WHERE id=?",id);
@@ -101,7 +135,7 @@ public class CareScheduleService {
 
     @Transactional
     public Map<String,Object> complete(String email,String ip,String id,JsonNode body) {
-        long actor=access.requireRole(email, "VETERINARIAN"); var schedule=lockedSchedule(id);
+        long actor=access.requireVeterinarian(email); var schedule=lockedSchedule(id);
         var fields=VetInput.parse(body,"done_date:date","next_start_time:time","next_end_time:time");
         fields.putIfAbsent("done_date",time.today()); VetInput.required(fields,"done_date");
         LocalDate done=(LocalDate)fields.get("done_date");
@@ -149,7 +183,7 @@ public class CareScheduleService {
     }
 
     public Map<String,Object> list(String email,String horse,String care,Integer days,ApiPage page) {
-        access.requireRole(email, "VETERINARIAN"); validateCare(care);
+        access.requireVeterinarian(email); validateCare(care);
         if(horse!=null) access.requireHorse(horse,false);
         if(days!=null && days<0) throw VetException.invalid("due_within_days","Phải >= 0");
         String from=" FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id LEFT JOIN calendar_events ce ON ce.id=p.calendar_event_id";
@@ -166,7 +200,7 @@ public class CareScheduleService {
     }
 
     public Map<String,Object> calendar(String email,LocalDate from,LocalDate to,String scope,String horse,String care,boolean context,ApiPage page) {
-        long actor=access.requireRole(email, "VETERINARIAN"); validateCare(care);
+        long actor=access.requireVeterinarian(email); validateCare(care);
         if(!List.of("mine","all").contains(scope)) throw VetException.invalid("scope","Chỉ nhận mine hoặc all");
         if(from==null || to==null || from.isAfter(to)) throw VetException.invalid("from","Cần from và to hợp lệ");
         if(horse!=null) access.requireHorse(horse,false);
@@ -214,7 +248,7 @@ public class CareScheduleService {
         if(rows.isEmpty()) throw VetException.invalid("assigned_doctor_id","Không tìm thấy bác sĩ");
         var user=rows.getFirst();
         String role=data.db.queryForObject("SELECT role_name FROM roles WHERE role_id=?",String.class,user.get("role_id"));
-        if(active && (!"VETERINARIAN".equals(role) || !"APPROVED".equals(user.get("status")) || user.get("deleted_at")!=null))
+        if(active && (!List.of("VETERINARIAN", "HEAD_VETERINARIAN").contains(role) || !"APPROVED".equals(user.get("status")) || user.get("deleted_at")!=null))
             throw VetException.invalid("assigned_doctor_id","Phải là bác sĩ đang hoạt động");
     }
     private Map<String,Object> lockedSchedule(String id) {
@@ -262,7 +296,13 @@ public class CareScheduleService {
         if(due.isBefore(now)) due=now;
         removeFutureReminders(event.get("id").toString());
         String name=data.db.queryForObject("SELECT horse_name FROM horses WHERE id=?",String.class,horse(schedule));
-        notifications.schedule(doctor(schedule),"Calendar_Events",event.get("id").toString(),"Ngày mai ("+event.get("event_date")+") có lịch "+LABELS.get(schedule.get("care_type"))+" cho ngựa "+name+" lúc "+event.get("start_time"),due);
+        var params=new java.util.LinkedHashMap<String,Object>();
+        params.put("horse_id",horse(schedule)); params.put("horse_name",name);
+        params.put("event_date",event.get("event_date").toString());
+        if(event.get("start_time")!=null) params.put("start_time",event.get("start_time").toString());
+        params.put("care_label",LABELS.get(schedule.get("care_type")));
+        notifications.schedule(doctor(schedule),"Calendar_Events",event.get("id").toString(),
+                com.example.springbootbackend.veterinarian.notification.NotificationContent.Type.CARE_ASSIGNED,params,due);
     }
     private void removeFutureReminders(String event) {
         data.db.update("DELETE FROM notifications WHERE related_table='Calendar_Events' AND related_id=? AND scheduled_at>?",event,time.utcNow());
@@ -278,4 +318,22 @@ public class CareScheduleService {
     private LocalDate nextDate(LocalDate date,int days) {
         try { return date.plusDays(days); } catch(DateTimeException ex) { throw VetException.invalid("frequency_days","Ngày vượt phạm vi cho phép"); }
     }
+
+    public java.util.List<java.util.Map<String, Object>> listVeterinarians() {
+        return data.db.query(
+                "SELECT u.user_id, u.full_name, u.email FROM users u "
+                + "JOIN roles r ON r.role_id=u.role_id "
+                + "WHERE r.role_name IN ('VETERINARIAN','HEAD_VETERINARIAN') AND u.status='APPROVED' "
+                + "AND u.must_change_password=FALSE AND u.deleted_at IS NULL "
+                + "ORDER BY lower(u.full_name),u.user_id",
+                (rs, rowNum) -> {
+                    java.util.Map<String, Object> map = new java.util.HashMap<>();
+                    map.put("id", rs.getLong("user_id"));
+                    map.put("name", rs.getString("full_name"));
+                    map.put("email", rs.getString("email"));
+                    return map;
+                }
+        );
+    }
 }
+

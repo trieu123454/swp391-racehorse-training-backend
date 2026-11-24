@@ -14,7 +14,7 @@ Database được quản lý bằng Flyway, Hibernate chỉ kiểm tra schema (`
 
 ## Yeu cau
 
-- Java 25 de chay Maven/app, project compile target Java 21 de tuong thich Spring Boot 3.3.x
+- Java 25 de chay Maven/app; project compile target Java 21 de tuong thich class scanner cua Spring Boot 3.3 (van build/run bang JDK 25).
 - Maven 3.9+
 
 ## Chay project
@@ -26,7 +26,7 @@ Thành viên mới sao chép `application-local.properties.example` thành `appl
 Neu Maven tren may van dang tro den JDK khac, set `JAVA_HOME` ve JDK 25 truoc:
 
 ```powershell
-$env:JAVA_HOME="C:\Program Files\Java\jdk-25.0.4.1"
+$env:JAVA_HOME="C:\Program Files\Java\jdk-25.0.4"
 $env:Path="$env:JAVA_HOME\bin;$env:Path"
 mvn -version
 ```
