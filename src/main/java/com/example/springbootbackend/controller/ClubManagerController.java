@@ -13,240 +13,304 @@ import com.example.springbootbackend.service.InventoryService;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
-
 import java.security.Principal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/club-manager")
 @PreAuthorize("hasRole('CLUB_MANAGER')")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class ClubManagerController {
-    private final ClubManagerService service;
-    private final InventoryService inventory;
+  private final ClubManagerService service;
+  private final InventoryService inventory;
 
-    public ClubManagerController(ClubManagerService service, InventoryService inventory) {
-        this.service = service;
-        this.inventory = inventory;
-    }
+  public ClubManagerController(ClubManagerService service, InventoryService inventory) {
+    this.service = service;
+    this.inventory = inventory;
+  }
 
-    @GetMapping("/users/pending")
-    public PendingUserPageResponse pendingUsers(
-            Principal principal,
-            @RequestParam(name = "role", required = false) String role,
-            @RequestParam(name = "page", defaultValue = "1") int page,
-            @RequestParam(name = "limit", defaultValue = "10") int limit) {
-        return service.pendingUsers(principal.getName(), role, page, limit);
-    }
+  @GetMapping("/users/pending")
+  public PendingUserPageResponse pendingUsers(
+      Principal principal,
+      @RequestParam(name = "role", required = false) String role,
+      @RequestParam(name = "page", defaultValue = "1") int page,
+      @RequestParam(name = "limit", defaultValue = "10") int limit) {
+    return service.pendingUsers(principal.getName(), role, page, limit);
+  }
 
-    @GetMapping("/users")
-    @PreAuthorize("hasAnyRole('CLUB_MANAGER', 'HEAD_TRAINER')")
-    public List<PendingUserResponse> users(
-            Principal principal,
-            @RequestParam(name = "status", defaultValue = "APPROVED") String status,
-            @RequestParam(name = "role", required = false) String role) {
-        return service.users(principal.getName(), status, role);
-    }
+  @GetMapping("/users")
+  @PreAuthorize("hasAnyRole('CLUB_MANAGER', 'HEAD_TRAINER')")
+  public List<PendingUserResponse> users(
+      Principal principal,
+      @RequestParam(name = "status", defaultValue = "APPROVED") String status,
+      @RequestParam(name = "role", required = false) String role) {
+    return service.users(principal.getName(), status, role);
+  }
 
-    @PostMapping("/users")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createStaffAccount(Principal principal, @Valid @RequestBody CreateStaffUserRequest request) {
-        return service.createStaffAccount(principal.getName(), request);
-    }
+  @PostMapping("/users")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createStaffAccount(
+      Principal principal, @Valid @RequestBody CreateStaffUserRequest request) {
+    return service.createStaffAccount(principal.getName(), request);
+  }
 
-    @PatchMapping("/users/{userId}/approve")
-    public UserApprovalResponse approve(Principal principal, @PathVariable("userId") Long userId) {
-        return service.approve(principal.getName(), userId);
-    }
+  @PatchMapping("/users/{userId}/approve")
+  public UserApprovalResponse approve(Principal principal, @PathVariable("userId") Long userId) {
+    return service.approve(principal.getName(), userId);
+  }
 
-    @PatchMapping("/users/{userId}/reject")
-    public Map<String, Object> reject(Principal principal, @PathVariable("userId") Long userId, @Valid @RequestBody(required = false) RejectUserRequest request) {
-        return service.reject(principal.getName(), userId, request == null ? null : request.reason());
-    }
+  @PatchMapping("/users/{userId}/reject")
+  public Map<String, Object> reject(
+      Principal principal,
+      @PathVariable("userId") Long userId,
+      @Valid @RequestBody(required = false) RejectUserRequest request) {
+    return service.reject(principal.getName(), userId, request == null ? null : request.reason());
+  }
 
-    @GetMapping("/role-change-requests")
-    public List<Map<String, Object>> roleChangeRequests(Principal principal, @RequestParam(name = "status", defaultValue = "Pending") String status) {
-        return service.roleChangeRequests(principal.getName(), status);
-    }
+  @GetMapping("/role-change-requests")
+  public List<Map<String, Object>> roleChangeRequests(
+      Principal principal, @RequestParam(name = "status", defaultValue = "Pending") String status) {
+    return service.roleChangeRequests(principal.getName(), status);
+  }
 
-    @PatchMapping("/role-change-requests/{requestId}")
-    public Map<String, Object> handleRoleChange(Principal principal, @PathVariable("requestId") String requestId, @Valid @RequestBody RoleChangeActionRequest request) {
-        return service.handleRoleChange(principal.getName(), requestId, request.action());
-    }
+  @PatchMapping("/role-change-requests/{requestId}")
+  public Map<String, Object> handleRoleChange(
+      Principal principal,
+      @PathVariable("requestId") String requestId,
+      @Valid @RequestBody RoleChangeActionRequest request) {
+    return service.handleRoleChange(principal.getName(), requestId, request.action());
+  }
 
-    @PatchMapping("/users/{userId}/lock")
-    public Map<String, Object> lock(Principal principal, @PathVariable("userId") Long userId, @Valid @RequestBody(required = false) LockUserRequest request) {
-        return service.lock(principal.getName(), userId, request == null ? null : request.reason());
-    }
+  @PatchMapping("/users/{userId}/lock")
+  public Map<String, Object> lock(
+      Principal principal,
+      @PathVariable("userId") Long userId,
+      @Valid @RequestBody(required = false) LockUserRequest request) {
+    return service.lock(principal.getName(), userId, request == null ? null : request.reason());
+  }
 
-    @PatchMapping("/users/{userId}/unlock")
-    public Map<String, Object> unlock(Principal principal, @PathVariable("userId") Long userId) {
-        return service.unlock(principal.getName(), userId);
-    }
+  @PatchMapping("/users/{userId}/unlock")
+  public Map<String, Object> unlock(Principal principal, @PathVariable("userId") Long userId) {
+    return service.unlock(principal.getName(), userId);
+  }
 
-    @PatchMapping("/users/{userId}/role")
-    public Map<String, Object> updateRole(Principal principal, @PathVariable("userId") Long userId, @Valid @RequestBody UpdateUserRoleRequest request) {
-        return service.updateRole(principal.getName(), userId, request.roleName());
-    }
+  @PatchMapping("/users/{userId}/role")
+  public Map<String, Object> updateRole(
+      Principal principal,
+      @PathVariable("userId") Long userId,
+      @Valid @RequestBody UpdateUserRoleRequest request) {
+    return service.updateRole(principal.getName(), userId, request.roleName());
+  }
 
-    @GetMapping("/operations-report")
-    public Map<String, Object> operationsReport(Principal principal, @RequestParam(name = "from", required = false) LocalDate from,
-                                                @RequestParam(name = "to", required = false) LocalDate to) {
-        return service.operationsReport(principal.getName(), from, to);
-    }
+  @GetMapping("/operations-report")
+  public Map<String, Object> operationsReport(
+      Principal principal,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to) {
+    return service.operationsReport(principal.getName(), from, to);
+  }
 
-    @GetMapping("/races")
-    public Map<String, Object> officialRaces(Principal principal) {
-        return service.officialRaces(principal.getName());
-    }
+  @GetMapping("/races")
+  public Map<String, Object> officialRaces(Principal principal) {
+    return service.officialRaces(principal.getName());
+  }
 
-    @PostMapping("/races")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createOfficialRace(Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
-        return service.createOfficialRace(principal.getName(), request.getRemoteAddr(), body);
-    }
+  @PostMapping("/races")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createOfficialRace(
+      Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
+    return service.createOfficialRace(principal.getName(), request.getRemoteAddr(), body);
+  }
 
-    @PatchMapping("/races/{raceId}")
-    public Map<String, Object> updateOfficialRace(Principal principal, HttpServletRequest request,
-                                                  @PathVariable("raceId") UUID raceId, @RequestBody JsonNode body) {
-        return service.updateOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
-    }
+  @PatchMapping("/races/{raceId}")
+  public Map<String, Object> updateOfficialRace(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("raceId") UUID raceId,
+      @RequestBody JsonNode body) {
+    return service.updateOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
+  }
 
-    @PostMapping("/races/{raceId}/cancel")
-    public Map<String, Object> cancelOfficialRace(Principal principal, HttpServletRequest request,
-                                                  @PathVariable("raceId") UUID raceId, @RequestBody JsonNode body) {
-        return service.cancelOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
-    }
+  @PostMapping("/races/{raceId}/cancel")
+  public Map<String, Object> cancelOfficialRace(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("raceId") UUID raceId,
+      @RequestBody JsonNode body) {
+    return service.cancelOfficialRace(principal.getName(), request.getRemoteAddr(), raceId, body);
+  }
 
-    @GetMapping("/races/{raceId}/entries")
-    public Map<String, Object> officialRaceEntries(Principal principal, @PathVariable("raceId") UUID raceId) {
-        return service.officialRaceEntries(principal.getName(), raceId);
-    }
+  @GetMapping("/races/{raceId}/entries")
+  public Map<String, Object> officialRaceEntries(
+      Principal principal, @PathVariable("raceId") UUID raceId) {
+    return service.officialRaceEntries(principal.getName(), raceId);
+  }
 
-    @GetMapping("/competition-report")
-    public Map<String, Object> competitionReport(Principal principal,
-                                                 @RequestParam(name = "from", required = false) LocalDate from,
-                                                 @RequestParam(name = "to", required = false) LocalDate to) {
-        return service.competitionReport(principal.getName(), from, to);
-    }
+  @GetMapping("/competition-report")
+  public Map<String, Object> competitionReport(
+      Principal principal,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to) {
+    return service.competitionReport(principal.getName(), from, to);
+  }
 
-    @GetMapping("/inventory-items")
-    public Map<String, Object> inventoryItems(Principal principal) {
-        return inventory.managerItems(principal.getName());
-    }
+  @GetMapping("/inventory-items")
+  public Map<String, Object> inventoryItems(Principal principal) {
+    return inventory.managerItems(principal.getName());
+  }
 
-    @GetMapping("/inventory-items/{id}")
-    public Map<String, Object> inventoryItem(Principal principal, @PathVariable("id") UUID id) {
-        return inventory.managerItemDetail(principal.getName(), id);
-    }
+  @GetMapping("/inventory-items/{id}")
+  public Map<String, Object> inventoryItem(Principal principal, @PathVariable("id") UUID id) {
+    return inventory.managerItemDetail(principal.getName(), id);
+  }
 
-    @PostMapping("/inventory-items")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createInventoryItem(Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
-        return inventory.createItem(principal.getName(), request.getRemoteAddr(), body);
-    }
+  @PostMapping("/inventory-items")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createInventoryItem(
+      Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
+    return inventory.createItem(principal.getName(), request.getRemoteAddr(), body);
+  }
 
-    @PatchMapping("/inventory-items/{id}")
-    public Map<String, Object> updateInventoryItem(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return inventory.updateItem(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/inventory-items/{id}")
+  public Map<String, Object> updateInventoryItem(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return inventory.updateItem(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PostMapping("/inventory-items/{id}/receipts")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> receiveInventory(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return inventory.receive(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PostMapping("/inventory-items/{id}/receipts")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> receiveInventory(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return inventory.receive(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PostMapping("/inventory-items/{id}/adjustments")
-    public Map<String, Object> adjustInventory(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return inventory.adjust(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PostMapping("/inventory-items/{id}/adjustments")
+  public Map<String, Object> adjustInventory(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return inventory.adjust(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PatchMapping("/inventory-items/{id}/deactivate")
-    public Map<String, Object> deactivateInventory(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id) {
-        return inventory.deactivate(principal.getName(), request.getRemoteAddr(), id);
-    }
+  @PatchMapping("/inventory-items/{id}/deactivate")
+  public Map<String, Object> deactivateInventory(
+      Principal principal, HttpServletRequest request, @PathVariable("id") UUID id) {
+    return inventory.deactivate(principal.getName(), request.getRemoteAddr(), id);
+  }
 
-    @GetMapping("/inventory-transactions")
-    public Map<String, Object> inventoryTransactions(Principal principal, @RequestParam(name = "itemId", required = false) UUID itemId,
-                                                     @RequestParam(name = "limit", defaultValue = "50") int limit) {
-        return inventory.transactions(principal.getName(), true, itemId, limit);
-    }
+  @GetMapping("/inventory-transactions")
+  public Map<String, Object> inventoryTransactions(
+      Principal principal,
+      @RequestParam(name = "itemId", required = false) UUID itemId,
+      @RequestParam(name = "limit", defaultValue = "50") int limit) {
+    return inventory.transactions(principal.getName(), true, itemId, limit);
+  }
 
-    @GetMapping("/supply-requests")
-    public Map<String, Object> supplyRequests(Principal principal, @RequestParam(name = "status", defaultValue = "Pending") String status) {
-        return inventory.supplyRequests(principal.getName(), true, status);
-    }
+  @GetMapping("/supply-requests")
+  public Map<String, Object> supplyRequests(
+      Principal principal, @RequestParam(name = "status", defaultValue = "Pending") String status) {
+    return inventory.supplyRequests(principal.getName(), true, status);
+  }
 
-    @PatchMapping("/supply-requests/{id}")
-    public Map<String, Object> reviewSupplyRequest(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return inventory.reviewSupplyRequest(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/supply-requests/{id}")
+  public Map<String, Object> reviewSupplyRequest(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return inventory.reviewSupplyRequest(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @GetMapping("/grooms")
-    public List<Map<String, Object>> activeGrooms(Principal principal) {
-        return service.activeGrooms(principal.getName());
-    }
+  @GetMapping("/grooms")
+  public List<Map<String, Object>> activeGrooms(Principal principal) {
+    return service.activeGrooms(principal.getName());
+  }
 
-    @GetMapping("/audit-logs")
-    public Map<String, Object> auditLogs(Principal principal, @RequestParam(name = "from", required = false) LocalDate from,
-                                         @RequestParam(name = "to", required = false) LocalDate to, @RequestParam(name = "page", defaultValue = "1") int page,
-                                         @RequestParam(name = "limit", defaultValue = "50") int limit) {
-        return service.auditLogs(principal.getName(), from, to, page, limit);
-    }
+  @GetMapping("/audit-logs")
+  public Map<String, Object> auditLogs(
+      Principal principal,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to,
+      @RequestParam(name = "page", defaultValue = "1") int page,
+      @RequestParam(name = "limit", defaultValue = "50") int limit) {
+    return service.auditLogs(principal.getName(), from, to, page, limit);
+  }
 
-    @GetMapping("/groom-tasks")
-    public Map<String, Object> groomTasks(Principal principal, @RequestParam(name = "date", required = false) LocalDate date) {
-        return service.groomTasks(principal.getName(), date);
-    }
+  @GetMapping("/groom-tasks")
+  public Map<String, Object> groomTasks(
+      Principal principal, @RequestParam(name = "date", required = false) LocalDate date) {
+    return service.groomTasks(principal.getName(), date);
+  }
 
-    @PostMapping("/groom-tasks")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> assignGroomTask(Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
-        return service.assignGroomTask(principal.getName(), request.getRemoteAddr(), body);
-    }
+  @PostMapping("/groom-tasks")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> assignGroomTask(
+      Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
+    return service.assignGroomTask(principal.getName(), request.getRemoteAddr(), body);
+  }
 
-    @PatchMapping("/groom-tasks/{id}")
-    public Map<String, Object> updateGroomTask(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.updateGroomTask(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/groom-tasks/{id}")
+  public Map<String, Object> updateGroomTask(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.updateGroomTask(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @GetMapping("/groom-incidents")
-    public Map<String, Object> incidents(Principal principal, @RequestParam(name = "status", defaultValue = "Open") String status) {
-        return service.incidents(principal.getName(), status);
-    }
+  @GetMapping("/groom-incidents")
+  public Map<String, Object> incidents(
+      Principal principal, @RequestParam(name = "status", defaultValue = "Open") String status) {
+    return service.incidents(principal.getName(), status);
+  }
 
-    @GetMapping("/groom-incidents/assignees")
-    public Map<String, Object> incidentAssignees(Principal principal) {
-        return service.incidentAssignees(principal.getName());
-    }
+  @GetMapping("/groom-incidents/assignees")
+  public Map<String, Object> incidentAssignees(Principal principal) {
+    return service.incidentAssignees(principal.getName());
+  }
 
-    @PatchMapping("/groom-incidents/{id}/assignment")
-    public Map<String, Object> assignIncident(Principal principal, HttpServletRequest request,
-                                              @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.assignIncident(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/groom-incidents/{id}/assignment")
+  public Map<String, Object> assignIncident(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.assignIncident(principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PatchMapping("/groom-incidents/{id}/result")
-    public Map<String, Object> submitIncidentResult(Principal principal, HttpServletRequest request,
-                                                    @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.submitManagerIncidentResult(principal.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/groom-incidents/{id}/result")
+  public Map<String, Object> submitIncidentResult(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.submitManagerIncidentResult(
+        principal.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PatchMapping("/groom-incidents/{id}/resolve")
-    public Map<String, Object> resolveIncident(Principal principal, HttpServletRequest request, @PathVariable("id") UUID id) {
-        return service.resolveIncident(principal.getName(), request.getRemoteAddr(), id);
-    }
+  @PatchMapping("/groom-incidents/{id}/resolve")
+  public Map<String, Object> resolveIncident(
+      Principal principal, HttpServletRequest request, @PathVariable("id") UUID id) {
+    return service.resolveIncident(principal.getName(), request.getRemoteAddr(), id);
+  }
 
-    @PostMapping("/financial-transactions")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> addFinancialTransaction(Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
-        return service.addFinancialTransaction(principal.getName(), request.getRemoteAddr(), body);
-    }
+  @PostMapping("/financial-transactions")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> addFinancialTransaction(
+      Principal principal, HttpServletRequest request, @RequestBody JsonNode body) {
+    return service.addFinancialTransaction(principal.getName(), request.getRemoteAddr(), body);
+  }
 }

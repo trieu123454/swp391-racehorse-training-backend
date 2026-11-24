@@ -31,6 +31,7 @@ Các API mới trả JSON snake_case; lỗi có dạng `error: {code,message,det
 | POST, GET | `/api/horses/{horseId}/diet-records` | Khẩu phần; `active_on`, `include_history` |
 | PATCH | `/api/diet-records/{id}` | Sửa hoặc kết thúc khẩu phần |
 | POST, GET | `/api/horses/{horseId}/injury-markers` | Thêm đánh giá; `latest_only`, `body_part` |
+| PATCH | `/api/injury-markers/{id}` | Thêm đánh giá nối tiếp từ mốc mới nhất; giữ nguyên mốc cũ |
 | GET | `/api/vet/health-overview` | Tổng quan đàn; lọc `section` |
 | PATCH | `/api/horses/{id}/health-status` | Cập nhật trạng thái sức khỏe |
 | PUT | `/api/horses/{id}/training-lock` | Khóa/cập nhật lý do khóa |
@@ -41,11 +42,16 @@ Các API mới trả JSON snake_case; lỗi có dạng `error: {code,message,det
 | POST | `/api/periodic-care-schedules/{id}/cancel-event` | Hủy sự kiện, giữ quy tắc |
 | POST | `/api/periodic-care-schedules/{id}/complete` | Hoàn thành và tính kỳ tiếp theo |
 | GET | `/api/vet/calendar` | `from`, `to`, `scope=mine/all`, `horse_id`, `care_type`, `include_context` |
+| GET | `/api/veterinarians` | Danh sách bác sĩ đủ điều kiện nhận ca; Club Manager hoặc Veterinarian |
 | GET | `/api/notifications` | `unread_only`, kèm `unread_count` |
 | PATCH | `/api/notifications/{id}/read` | Đọc một thông báo đã đến hạn |
 | POST | `/api/notifications/read-all` | Đọc tất cả thông báo đã đến hạn |
 
 Danh sách dùng `page=1&limit=20`, tối đa 100, trả `data,total,page,limit`.
+`PATCH /api/injury-markers/{id}` chỉ nhận mốc mới nhất của vị trí đó, tạo một marker mới với `id`, `marked_at` và `marked_by` mới; các trường không gửi sẽ được giữ từ mốc gốc. `body_part` không thể đổi trong chuỗi lịch sử. Response trả marker vừa tạo, nên frontend cần dùng `id` mới cho lần cập nhật tiếp theo.
+`GET /api/veterinarians` trả danh sách không phân trang với các trường `id`, `name`, `email`;
+chỉ gồm tài khoản role `VETERINARIAN` đã được duyệt, không còn yêu cầu đổi mật khẩu và chưa bị xóa.
+Role bác sĩ trong hệ thống hiện là `VETERINARIAN`, không cần tạo role trùng.
 Health overview trả toàn đàn theo đặc tả. Calendar giữ cả các lần chăm sóc
 đã hoàn thành; join bằng `source_id` để lịch sử không biến mất khi con trỏ
 `calendar_event_id` chuyển sang kỳ mới. `include_context=true` thêm
