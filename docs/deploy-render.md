@@ -3,7 +3,7 @@
 ## Create the service
 
 1. Push this project, including `render.yaml` and `Dockerfile`, to the Git repository you want Render to deploy.
-2. In Render, create a new Blueprint and connect that repository. Render reads `render.yaml` and builds the Docker image from the repository root.
+2. In Render, create a new Blueprint and connect that repository. Render reads `render.yaml` and builds the Docker image from the repository root. The Docker build and application runtime use Eclipse Temurin Java 25.
 3. During Blueprint setup, enter the environment variables listed below. Render generates `AUTH_JWT_SECRET` for the service.
 4. Deploy, then check `https://<service-name>.onrender.com/api/health` and open `https://<service-name>.onrender.com/swagger-ui/index.html`.
 

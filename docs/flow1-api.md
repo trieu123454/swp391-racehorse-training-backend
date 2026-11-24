@@ -18,6 +18,8 @@ The multipart `POST` and correction `PATCH` contain a JSON `request` part, optio
 
 Request body fields:
 
+Horse list rows include `stable_box: {id, box_code, section}`; `box_code` is the chuồng name used for display/grouping. Results are ordered by chuồng name and then horse name, with unassigned horses last, so the client can render horses grouped under each chuồng.
+
 ```json
 {
   "requestType": "REGISTER",

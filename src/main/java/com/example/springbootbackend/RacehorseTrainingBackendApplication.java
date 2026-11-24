@@ -11,25 +11,27 @@ import org.springframework.lang.NonNull;
 /** Spring Boot entry point for the racehorse training backend. */
 @SpringBootApplication
 public class RacehorseTrainingBackendApplication {
+  public static void main(String[] args) {
+    SpringApplication.run(RacehorseTrainingBackendApplication.class, args);
+  }
 
-    public static void main(String[] args) {
-        SpringApplication.run(RacehorseTrainingBackendApplication.class, args);
-    }
-
-    // Switch Supabase Session Mode (:5432, max 15 clients) to Transaction Pooler (:6543) for concurrent team runs.
-    @Bean
-    static BeanPostProcessor supabasePoolerPortNormalizer() {
-        return new BeanPostProcessor() {
-            @Override
-            public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
-                if (bean instanceof HikariDataSource hikari) {
-                    String url = hikari.getJdbcUrl();
-                    if (url != null && url.contains(".pooler.supabase.com:5432/")) {
-                        hikari.setJdbcUrl(url.replace(".pooler.supabase.com:5432/", ".pooler.supabase.com:6543/"));
-                    }
-                }
-                return bean;
-            }
-        };
-    }
+  // Switch Supabase Session Mode (:5432, max 15 clients) to Transaction Pooler (:6543) for
+  // concurrent team runs.
+  @Bean
+  static BeanPostProcessor supabasePoolerPortNormalizer() {
+    return new BeanPostProcessor() {
+      @Override
+      public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName)
+          throws BeansException {
+        if (bean instanceof HikariDataSource hikari) {
+          String url = hikari.getJdbcUrl();
+          if (url != null && url.contains(".pooler.supabase.com:5432/")) {
+            hikari.setJdbcUrl(
+                url.replace(".pooler.supabase.com:5432/", ".pooler.supabase.com:6543/"));
+          }
+        }
+        return bean;
+      }
+    };
+  }
 }

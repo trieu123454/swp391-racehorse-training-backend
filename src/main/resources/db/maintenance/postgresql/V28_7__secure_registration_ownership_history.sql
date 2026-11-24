@@ -1,0 +1,1 @@
+ALTER TABLE horse_ownership_history ENABLE ROW LEVEL SECURITY;

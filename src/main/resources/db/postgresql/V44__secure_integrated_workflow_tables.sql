@@ -1,0 +1,5 @@
+ALTER TABLE horse_image_uploads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE health_exam_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE horse_registration_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE owner_ownership_transfer_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE horse_ownership_history ENABLE ROW LEVEL SECURITY;

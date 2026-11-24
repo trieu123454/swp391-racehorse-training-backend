@@ -1,9 +1,9 @@
 package com.example.springbootbackend.security;
 
+import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import jakarta.servlet.DispatcherType;
 import java.util.List;
-
 import javax.crypto.SecretKey;
-
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -29,96 +29,100 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import com.nimbusds.jose.jwk.source.ImmutableSecret;
-
-import jakarta.servlet.DispatcherType;
-
 @Configuration
 @EnableMethodSecurity
 @EnableConfigurationProperties({JwtProperties.class, GoogleProperties.class})
 public class SecurityConfig {
-
-    @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationFilter jwtAuthenticationFilter)
-            throws Exception {
-        return http
-                .cors(Customizer.withDefaults())
-                .csrf(AbstractHttpConfigurer::disable)
-                .exceptionHandling(errors -> errors
-                        .authenticationEntryPoint((request, response, ex) -> {
-                            if (VetHttpSecurity.applies(request)) {
-                                VetHttpSecurity.write(response, 401,
-                                        "UNAUTHENTICATED", "Vui lòng đăng nhập");
-                                return;
-                            }
-                            response.setStatus(401);
-                            response.setContentType("application/json");
-                            response.getWriter().write("{\"message\":\"Authentication required\"}");
+  @Bean
+  SecurityFilterChain securityFilterChain(
+      HttpSecurity http, JwtAuthenticationFilter jwtAuthenticationFilter) throws Exception {
+    return http.cors(Customizer.withDefaults())
+        .csrf(AbstractHttpConfigurer::disable)
+        .exceptionHandling(
+            errors ->
+                errors
+                    .authenticationEntryPoint(
+                        (request, response, ex) -> {
+                          if (VetHttpSecurity.applies(request)) {
+                            VetHttpSecurity.write(
+                                response, 401, "UNAUTHENTICATED", "Vui lòng đăng nhập");
+                            return;
+                          }
+                          response.setStatus(401);
+                          response.setContentType("application/json");
+                          response.getWriter().write("{\"message\":\"Authentication required\"}");
                         })
-                        .accessDeniedHandler((request, response, ex) -> {
-                            if (VetHttpSecurity.applies(request)) {
-                                VetHttpSecurity.write(response, 403,
-                                        "FORBIDDEN", "Tài khoản không được phép truy cập");
-                                return;
-                            }
-                            response.sendError(403);
+                    .accessDeniedHandler(
+                        (request, response, ex) -> {
+                          if (VetHttpSecurity.applies(request)) {
+                            VetHttpSecurity.write(
+                                response, 403, "FORBIDDEN", "Tài khoản không được phép truy cập");
+                            return;
+                          }
+                          response.sendError(403);
                         }))
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-                        .requestMatchers("/api/auth/me", "/api/auth/users/**", "/api/auth/change-password").authenticated()
-                        .requestMatchers(
-                                "/api/auth/**",
-                                "/api/health",
-                                "/v3/api-docs/**",
-                                "/swagger-ui/**",
-                                "/swagger-ui.html"
-                        ).permitAll()
-                        .anyRequest().authenticated()
-                )
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .build();
-    }
+        .sessionManagement(
+            session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(
+            auth ->
+                auth.dispatcherTypeMatchers(DispatcherType.ERROR)
+                    .permitAll()
+                    .requestMatchers(
+                        "/api/auth/me", "/api/auth/users/**", "/api/auth/change-password")
+                    .authenticated()
+                    .requestMatchers(
+                        "/api/auth/**",
+                        "/api/health",
+                        "/error",
+                        "/v3/api-docs/**",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html")
+                    .permitAll()
+                    .anyRequest()
+                    .authenticated())
+        .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+        .build();
+  }
 
-    @Bean
-    CorsConfigurationSource corsConfigurationSource(
-            @Value("${app.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8082,http://127.0.0.1:8082}")
-            List<String> allowedOrigins) {
-        CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(allowedOrigins);
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Origin", "Accept", "X-Requested-With"));
-        configuration.setAllowCredentials(true);
+  @Bean
+  CorsConfigurationSource corsConfigurationSource(
+      @Value(
+              "${app.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8082,http://127.0.0.1:8082}")
+          List<String> allowedOrigins) {
+    CorsConfiguration configuration = new CorsConfiguration();
+    configuration.setAllowedOrigins(allowedOrigins);
+    configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+    configuration.setAllowedHeaders(
+        List.of("Authorization", "Content-Type", "Origin", "Accept", "X-Requested-With"));
+    configuration.setAllowCredentials(true);
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/**", configuration);
+    return source;
+  }
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
-        return source;
-    }
+  @Bean
+  AuthenticationManager authenticationManager(
+      AppUserDetailsService userDetailsService, PasswordEncoder passwordEncoder) {
+    DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+    provider.setUserDetailsService(userDetailsService);
+    provider.setPasswordEncoder(passwordEncoder);
+    return new ProviderManager(provider);
+  }
 
-    @Bean
-    AuthenticationManager authenticationManager(AppUserDetailsService userDetailsService, PasswordEncoder passwordEncoder) {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
-        provider.setUserDetailsService(userDetailsService);
-        provider.setPasswordEncoder(passwordEncoder);
-        return new ProviderManager(provider);
-    }
+  @Bean
+  PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+  }
 
-    @Bean
-    PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
+  @Bean
+  JwtEncoder jwtEncoder(JwtProperties properties) {
+    SecretKey secretKey = JwtService.secretKey(properties.secret());
+    return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey));
+  }
 
-    @Bean
-    JwtEncoder jwtEncoder(JwtProperties properties) {
-        SecretKey secretKey = JwtService.secretKey(properties.secret());
-        return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey));
-    }
-
-    @Bean
-    JwtDecoder jwtDecoder(JwtProperties properties) {
-        SecretKey secretKey = JwtService.secretKey(properties.secret());
-        return NimbusJwtDecoder.withSecretKey(secretKey)
-                .macAlgorithm(MacAlgorithm.HS256)
-                .build();
-    }
+  @Bean
+  JwtDecoder jwtDecoder(JwtProperties properties) {
+    SecretKey secretKey = JwtService.secretKey(properties.secret());
+    return NimbusJwtDecoder.withSecretKey(secretKey).macAlgorithm(MacAlgorithm.HS256).build();
+  }
 }
