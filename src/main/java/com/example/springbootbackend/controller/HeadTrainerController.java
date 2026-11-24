@@ -1,11 +1,16 @@
 package com.example.springbootbackend.controller;
 
+import com.example.springbootbackend.dto.request.ApiPage;
+import com.example.springbootbackend.service.HeadTrainerService;
+import com.example.springbootbackend.service.RaceSimulationService;
+import com.example.springbootbackend.service.TrainingAnalysisService;
+import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.servlet.http.HttpServletRequest;
 import java.security.Principal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -19,234 +24,318 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.example.springbootbackend.dto.request.ApiPage;
-import com.example.springbootbackend.service.HeadTrainerService;
-import com.example.springbootbackend.service.RaceSimulationService;
-import com.example.springbootbackend.service.TrainingAnalysisService;
-import com.fasterxml.jackson.databind.JsonNode;
-
-import jakarta.servlet.http.HttpServletRequest;
-
 @RestController
 @RequestMapping("/api")
 @PreAuthorize("hasRole('HEAD_TRAINER')")
 @io.swagger.v3.oas.annotations.tags.Tag(name = "Head Trainer")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class HeadTrainerController {
-    private final HeadTrainerService service;
-    private final RaceSimulationService simulations;
-    private final TrainingAnalysisService analysis;
+  private final HeadTrainerService service;
+  private final RaceSimulationService simulations;
+  private final TrainingAnalysisService analysis;
 
-    public HeadTrainerController(HeadTrainerService service, RaceSimulationService simulations, TrainingAnalysisService analysis) {
-        this.service = service;
-        this.simulations = simulations;
-        this.analysis = analysis;
-    }
+  public HeadTrainerController(
+      HeadTrainerService service,
+      RaceSimulationService simulations,
+      TrainingAnalysisService analysis) {
+    this.service = service;
+    this.simulations = simulations;
+    this.analysis = analysis;
+  }
 
-    @GetMapping("/horses/{horseId}/training-analysis")
-    public Map<String, Object> trainingAnalysis(Principal user, @PathVariable("horseId") UUID horseId,
-            @RequestParam(name = "from", required = false) LocalDate from, @RequestParam(name = "to", required = false) LocalDate to) {
-        return analysis.report(user.getName(), horseId, from, to);
-    }
+  @GetMapping("/horses/{horseId}/training-analysis")
+  public Map<String, Object> trainingAnalysis(
+      Principal user,
+      @PathVariable("horseId") UUID horseId,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to) {
+    return analysis.report(user.getName(), horseId, from, to);
+  }
 
-    @GetMapping("/head-trainer/overview")
-    public Map<String, Object> overview(Principal user,
-            @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
-        return service.overview(user.getName(), include_simulated);
-    }
+  @GetMapping("/head-trainer/overview")
+  public Map<String, Object> overview(
+      Principal user,
+      @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
+    return service.overview(user.getName(), include_simulated);
+  }
 
-    @GetMapping("/head-trainer/stable-incidents")
-    public Map<String, Object> stableIncidents(Principal user) {
-        return service.stableIncidents(user.getName());
-    }
+  @GetMapping("/head-trainer/stable-incidents")
+  public Map<String, Object> stableIncidents(Principal user) {
+    return service.stableIncidents(user.getName());
+  }
 
-    @GetMapping("/head-trainer/diet-records")
-    public Map<String, Object> standardDiets(Principal user) {
-        return service.standardDiets(user.getName());
-    }
+  @GetMapping("/head-trainer/diet-records")
+  public Map<String, Object> standardDiets(Principal user) {
+    return service.dietRecords(user.getName());
+  }
 
-    @PostMapping("/horses/{horseId}/standard-diet-records")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createStandardDiet(Principal user, HttpServletRequest request,
-            @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
-        return service.saveStandardDiet(user.getName(), request.getRemoteAddr(), horseId.toString(), null, body);
-    }
+  @PostMapping("/horses/{horseId}/standard-diet-records")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createStandardDiet(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("horseId") UUID horseId,
+      @RequestBody JsonNode body) {
+    return service.saveStandardDiet(
+        user.getName(), request.getRemoteAddr(), horseId.toString(), null, body);
+  }
 
-    @PatchMapping("/head-trainer/diet-records/{id}")
-    public Map<String, Object> updateStandardDiet(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.saveStandardDiet(user.getName(), request.getRemoteAddr(), null, id.toString(), body);
-    }
+  @PatchMapping("/head-trainer/diet-records/{id}")
+  public Map<String, Object> updateStandardDiet(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.saveStandardDiet(
+        user.getName(), request.getRemoteAddr(), null, id.toString(), body);
+  }
 
-    @PatchMapping("/head-trainer/stable-incidents/{id}/result")
-    public Map<String, Object> submitIncidentResult(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.submitIncidentResult(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/head-trainer/stable-incidents/{id}/result")
+  public Map<String, Object> submitIncidentResult(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.submitIncidentResult(user.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @GetMapping("/horses/{horseId}/training-metrics")
-    public List<Map<String, Object>> metrics(Principal user, @PathVariable("horseId") UUID horseId,
-            @RequestParam(name = "from", required = false) LocalDate from, @RequestParam(name = "to", required = false) LocalDate to,
-            @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
-        return service.metrics(user.getName(), horseId, from, to, include_simulated);
-    }
+  @GetMapping("/horses/{horseId}/training-metrics")
+  public List<Map<String, Object>> metrics(
+      Principal user,
+      @PathVariable("horseId") UUID horseId,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to,
+      @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
+    return service.metrics(user.getName(), horseId, from, to, include_simulated);
+  }
 
-    @GetMapping("/head-trainer/training-metrics/compare")
-    public Map<String, Object> compareMetrics(Principal user, @RequestParam("horse_ids") String horse_ids,
-            @RequestParam(name = "from", required = false) LocalDate from, @RequestParam(name = "to", required = false) LocalDate to,
-            @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
-        return service.compareMetrics(user.getName(), horse_ids, from, to, include_simulated);
-    }
+  @GetMapping("/head-trainer/training-metrics/compare")
+  public Map<String, Object> compareMetrics(
+      Principal user,
+      @RequestParam("horse_ids") String horse_ids,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to,
+      @RequestParam(name = "include_simulated", defaultValue = "true") boolean include_simulated) {
+    return service.compareMetrics(user.getName(), horse_ids, from, to, include_simulated);
+  }
 
-    @PostMapping("/training-schedules/{scheduleId}/metrics")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> recordMetrics(Principal user, HttpServletRequest request,
-            @PathVariable("scheduleId") UUID scheduleId, @RequestBody JsonNode body) {
-        return service.recordMetrics(user.getName(), request.getRemoteAddr(), scheduleId, body);
-    }
+  @PostMapping("/training-schedules/{scheduleId}/metrics")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> recordMetrics(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("scheduleId") UUID scheduleId,
+      @RequestBody JsonNode body) {
+    return service.recordMetrics(user.getName(), request.getRemoteAddr(), scheduleId, body);
+  }
 
-    @PostMapping("/horses/{horseId}/training-plans")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createPlan(Principal user, HttpServletRequest request,
-            @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
-        return service.createPlan(user.getName(), request.getRemoteAddr(), horseId, body);
-    }
+  @PostMapping("/horses/{horseId}/training-plans")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createPlan(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("horseId") UUID horseId,
+      @RequestBody JsonNode body) {
+    return service.createPlan(user.getName(), request.getRemoteAddr(), horseId, body);
+  }
 
-    @PostMapping("/training-plans")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createSharedPlan(Principal user, HttpServletRequest request,
-            @RequestBody JsonNode body) {
-        return service.createPlan(user.getName(), request.getRemoteAddr(), null, body);
-    }
+  @PostMapping("/training-plans")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createSharedPlan(
+      Principal user, HttpServletRequest request, @RequestBody JsonNode body) {
+    return service.createPlan(user.getName(), request.getRemoteAddr(), null, body);
+  }
 
-    @GetMapping("/horses/{horseId}/training-plans")
-    public Map<String, Object> plans(Principal user, @PathVariable("horseId") UUID horseId,
-            @RequestParam(name = "active_only", defaultValue = "false") boolean active_only) {
-        return service.plans(user.getName(), horseId, active_only);
-    }
+  @GetMapping("/horses/{horseId}/training-plans")
+  public Map<String, Object> plans(
+      Principal user,
+      @PathVariable("horseId") UUID horseId,
+      @RequestParam(name = "active_only", defaultValue = "false") boolean active_only) {
+    return service.plans(user.getName(), horseId, active_only);
+  }
 
-    @PatchMapping("/training-plans/{id}")
-    public Map<String, Object> updatePlan(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.updatePlan(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/training-plans/{id}")
+  public Map<String, Object> updatePlan(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.updatePlan(user.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @DeleteMapping("/training-plans/{id}")
-    public Map<String, Object> deletePlan(Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
-        return service.deletePlan(user.getName(), request.getRemoteAddr(), id);
-    }
+  @DeleteMapping("/training-plans/{id}")
+  public Map<String, Object> deletePlan(
+      Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
+    return service.deletePlan(user.getName(), request.getRemoteAddr(), id);
+  }
 
-    @PostMapping("/horses/{horseId}/training-schedules")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createSchedule(Principal user, HttpServletRequest request,
-            @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
-        return service.createSchedule(user.getName(), request.getRemoteAddr(), horseId, body);
-    }
+  @PostMapping("/horses/{horseId}/training-schedules")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createSchedule(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("horseId") UUID horseId,
+      @RequestBody JsonNode body) {
+    return service.createSchedule(user.getName(), request.getRemoteAddr(), horseId, body);
+  }
 
-    @GetMapping("/head-trainer/calendar")
-    public Map<String, Object> calendar(Principal user, @RequestParam(name = "from", required = false) LocalDate from,
-            @RequestParam(name = "to", required = false) LocalDate to, @RequestParam(name = "horse_id", required = false) UUID horse_id,
-            @RequestParam(name = "groom_id", required = false) Long groom_id, @RequestParam(name = "page", defaultValue = "1") int page,
-            @RequestParam(name = "limit", defaultValue = "100") int limit) {
-        return service.calendar(user.getName(), from, to, horse_id, groom_id, new ApiPage(page, limit));
-    }
+  @GetMapping("/head-trainer/calendar")
+  public Map<String, Object> calendar(
+      Principal user,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to,
+      @RequestParam(name = "horse_id", required = false) UUID horse_id,
+      @RequestParam(name = "groom_id", required = false) Long groom_id,
+      @RequestParam(name = "page", defaultValue = "1") int page,
+      @RequestParam(name = "limit", defaultValue = "100") int limit) {
+    return service.calendar(user.getName(), from, to, horse_id, groom_id, new ApiPage(page, limit));
+  }
 
-    @GetMapping("/head-trainer/grooms")
-    public Map<String, Object> grooms(Principal user) { return service.grooms(user.getName()); }
+  @GetMapping("/head-trainer/grooms")
+  public Map<String, Object> grooms(Principal user) {
+    return service.grooms(user.getName());
+  }
 
-    @PostMapping("/head-trainer/reset-clean-data")
-    public Map<String, Object> resetCleanData(Principal user, HttpServletRequest request) {
-        return service.resetAndSeedCleanTrainingData(user.getName(), request.getRemoteAddr());
-    }
+  @PostMapping("/head-trainer/reset-clean-data")
+  public Map<String, Object> resetCleanData(Principal user, HttpServletRequest request) {
+    return service.resetAndSeedCleanTrainingData(user.getName(), request.getRemoteAddr());
+  }
 
-    @PatchMapping("/training-schedules/{id}/assign-groom")
-    public Map<String, Object> assignGroom(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.assignGroom(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/training-schedules/{id}/assign-groom")
+  public Map<String, Object> assignGroom(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.assignGroom(user.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @GetMapping("/training-schedules/{id}")
-    public Map<String, Object> schedule(Principal user, @PathVariable("id") UUID id) {
-        return service.schedule(user.getName(), id);
-    }
+  @GetMapping("/training-schedules/{id}")
+  public Map<String, Object> schedule(Principal user, @PathVariable("id") UUID id) {
+    return service.schedule(user.getName(), id);
+  }
 
-    @PatchMapping("/training-schedules/{id}")
-    public Map<String, Object> updateSchedule(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return service.updateSchedule(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PatchMapping("/training-schedules/{id}")
+  public Map<String, Object> updateSchedule(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.updateSchedule(user.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @PostMapping("/horses/{horseId}/race-entries")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> registerRace(Principal user, HttpServletRequest request,
-            @PathVariable("horseId") UUID horseId, @RequestBody JsonNode body) {
-        return service.registerRace(user.getName(), request.getRemoteAddr(), horseId, body);
-    }
+  @GetMapping("/horses/{horseId}/race-entries/eligibility")
+  public Map<String, Object> raceEligibility(
+      Principal user, @PathVariable("horseId") UUID horseId, @RequestParam("race_id") UUID raceId) {
+    return service.raceEligibility(user.getName(), horseId, raceId);
+  }
 
-    @PatchMapping("/race-entries/{entryId}/result")
-    public Map<String, Object> recordRaceResult(Principal user, HttpServletRequest request, @PathVariable("entryId") UUID entryId,
-            @RequestBody JsonNode body) {
-        return service.recordRaceResult(user.getName(), request.getRemoteAddr(), entryId, body);
-    }
+  @PostMapping("/horses/{horseId}/race-entries")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> registerRace(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("horseId") UUID horseId,
+      @RequestBody JsonNode body) {
+    return service.registerRace(user.getName(), request.getRemoteAddr(), horseId, body);
+  }
 
-    @PostMapping("/training-schedules/{id}/videos")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> addTrainingVideo(Principal user, HttpServletRequest request, @PathVariable("id") UUID id,
-            @RequestBody JsonNode body) {
-        return service.addTrainingVideo(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PostMapping("/race-entries/{entryId}/cancel")
+  @PreAuthorize("hasAnyRole('HEAD_TRAINER', 'CLUB_MANAGER')")
+  public Map<String, Object> cancelRaceEntry(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("entryId") UUID entryId,
+      @RequestBody JsonNode body) {
+    return service.cancelRaceEntry(user.getName(), request.getRemoteAddr(), entryId, body);
+  }
 
-    @GetMapping("/horses/{horseId}/race-entries")
-    public Map<String, Object> raceEntries(Principal user, @PathVariable("horseId") UUID horseId,
-            @RequestParam(name = "page", defaultValue = "1") int page, @RequestParam(name = "limit", defaultValue = "100") int limit) {
-        return service.raceEntries(user.getName(), horseId, new ApiPage(page, limit));
-    }
+  @PostMapping("/race-entries/{entryId}/restore")
+  public Map<String, Object> restoreRaceEntry(
+      Principal user, HttpServletRequest request, @PathVariable("entryId") UUID entryId) {
+    return service.restoreRaceEntry(user.getName(), request.getRemoteAddr(), entryId);
+  }
 
-    @GetMapping("/head-trainer/races")
-    public Map<String, Object> races(Principal user, @RequestParam(name = "from", required = false) LocalDate from,
-            @RequestParam(name = "to", required = false) LocalDate to, @RequestParam(name = "page", defaultValue = "1") int page,
-            @RequestParam(name = "limit", defaultValue = "100") int limit) {
-        return service.races(user.getName(), from, to, new ApiPage(page, limit));
-    }
+  @PatchMapping("/race-entries/{entryId}/result")
+  public Map<String, Object> recordRaceResult(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("entryId") UUID entryId,
+      @RequestBody JsonNode body) {
+    return service.recordRaceResult(user.getName(), request.getRemoteAddr(), entryId, body);
+  }
 
-    @PostMapping("/head-trainer/race-simulations")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createSimulation(Principal user, HttpServletRequest request,
-            @RequestBody JsonNode body) {
-        return simulations.create(user.getName(), request.getRemoteAddr(), body);
-    }
+  @PostMapping("/training-schedules/{id}/videos")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> addTrainingVideo(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return service.addTrainingVideo(user.getName(), request.getRemoteAddr(), id, body);
+  }
 
-    @GetMapping("/head-trainer/race-simulations/active")
-    public Map<String, Object> activeSimulation(Principal user) {
-        return simulations.active(user.getName());
-    }
+  @GetMapping("/horses/{horseId}/race-entries")
+  public Map<String, Object> raceEntries(
+      Principal user,
+      @PathVariable("horseId") UUID horseId,
+      @RequestParam(name = "page", defaultValue = "1") int page,
+      @RequestParam(name = "limit", defaultValue = "100") int limit) {
+    return service.raceEntries(user.getName(), horseId, new ApiPage(page, limit));
+  }
 
-    @GetMapping("/head-trainer/race-simulations/active-sessions")
-    public Map<String, Object> activeSimulations(Principal user) {
-        return Map.of("data", simulations.activeSessions(user.getName()));
-    }
+  @GetMapping("/head-trainer/races")
+  public Map<String, Object> races(
+      Principal user,
+      @RequestParam(name = "from", required = false) LocalDate from,
+      @RequestParam(name = "to", required = false) LocalDate to,
+      @RequestParam(name = "page", defaultValue = "1") int page,
+      @RequestParam(name = "limit", defaultValue = "100") int limit) {
+    return service.races(user.getName(), from, to, new ApiPage(page, limit));
+  }
 
-    @PostMapping("/head-trainer/race-simulations/group")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createSimulationGroup(Principal user, HttpServletRequest request,
-            @RequestBody JsonNode body) {
-        return Map.of("data", simulations.createGroup(user.getName(), request.getRemoteAddr(), body));
-    }
+  @PostMapping("/head-trainer/race-simulations")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createSimulation(
+      Principal user, HttpServletRequest request, @RequestBody JsonNode body) {
+    return simulations.create(user.getName(), request.getRemoteAddr(), body);
+  }
 
-    @GetMapping("/head-trainer/race-simulations/{id}")
-    public Map<String, Object> simulation(Principal user, @PathVariable("id") UUID id) {
-        return simulations.detail(user.getName(), id);
-    }
+  @GetMapping("/head-trainer/race-simulations/active")
+  public Map<String, Object> activeSimulation(Principal user) {
+    return simulations.active(user.getName());
+  }
 
-    @PostMapping("/head-trainer/race-simulations/{id}/restart")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> restartSimulation(Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
-        return simulations.restartWithCurrentSpeedModel(user.getName(), request.getRemoteAddr(), id);
-    }
+  @GetMapping("/head-trainer/race-simulations/active-sessions")
+  public Map<String, Object> activeSimulations(Principal user) {
+    return Map.of("data", simulations.activeSessions(user.getName()));
+  }
 
-    @PostMapping("/head-trainer/race-simulations/{id}/finish")
-    public Map<String, Object> finishSimulation(Principal user, HttpServletRequest request,
-            @PathVariable("id") UUID id, @RequestBody JsonNode body) {
-        return simulations.finish(user.getName(), request.getRemoteAddr(), id, body);
-    }
+  @PostMapping("/head-trainer/race-simulations/group")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> createSimulationGroup(
+      Principal user, HttpServletRequest request, @RequestBody JsonNode body) {
+    return Map.of("data", simulations.createGroup(user.getName(), request.getRemoteAddr(), body));
+  }
+
+  @GetMapping("/head-trainer/race-simulations/{id}")
+  public Map<String, Object> simulation(Principal user, @PathVariable("id") UUID id) {
+    return simulations.detail(user.getName(), id);
+  }
+
+  @PostMapping("/head-trainer/race-simulations/{id}/restart")
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> restartSimulation(
+      Principal user, HttpServletRequest request, @PathVariable("id") UUID id) {
+    return simulations.restartWithCurrentSpeedModel(user.getName(), request.getRemoteAddr(), id);
+  }
+
+  @PostMapping("/head-trainer/race-simulations/{id}/finish")
+  public Map<String, Object> finishSimulation(
+      Principal user,
+      HttpServletRequest request,
+      @PathVariable("id") UUID id,
+      @RequestBody JsonNode body) {
+    return simulations.finish(user.getName(), request.getRemoteAddr(), id, body);
+  }
 }

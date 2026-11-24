@@ -1,0 +1,1 @@
+ALTER TABLE health_exam_logs ENABLE ROW LEVEL SECURITY;

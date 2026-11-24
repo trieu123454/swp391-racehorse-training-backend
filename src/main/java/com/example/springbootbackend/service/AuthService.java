@@ -1,22 +1,5 @@
 package com.example.springbootbackend.service;
 
-import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
-import java.util.UUID;
-
-import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
-import org.springframework.web.server.ResponseStatusException;
-
 import com.example.springbootbackend.dto.request.ChangePasswordRequest;
 import com.example.springbootbackend.dto.request.ForgotPasswordRequest;
 import com.example.springbootbackend.dto.request.GoogleLoginRequest;
@@ -30,7 +13,6 @@ import com.example.springbootbackend.dto.response.UserResponse;
 import com.example.springbootbackend.entity.AppUser;
 import com.example.springbootbackend.entity.AuditLog;
 import com.example.springbootbackend.entity.Notification;
-import com.example.springbootbackend.entity.PasswordResetCode;
 import com.example.springbootbackend.entity.RefreshToken;
 import com.example.springbootbackend.entity.Role;
 import com.example.springbootbackend.entity.UserStatus;
@@ -39,399 +21,405 @@ import com.example.springbootbackend.exception.AuthException;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
 import com.example.springbootbackend.repository.NotificationRepository;
-import com.example.springbootbackend.repository.PasswordResetCodeRepository;
 import com.example.springbootbackend.repository.RefreshTokenRepository;
 import com.example.springbootbackend.repository.RoleRepository;
+import com.example.springbootbackend.security.JwtAuthenticationFilter;
 import com.example.springbootbackend.security.JwtProperties;
 import com.example.springbootbackend.security.JwtService;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 @SuppressWarnings("null")
 public class AuthService {
-    private static final Set<String> REVIEWABLE_ROLES = Set.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "CLUB_MANAGER");
+  private static final Set<String> REVIEWABLE_ROLES =
+      Set.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "CLUB_MANAGER");
+  private final AppUserRepository userRepository;
+  private final RoleRepository roleRepository;
+  private final RefreshTokenRepository refreshTokenRepository;
+  private final PasswordEncoder passwordEncoder;
+  private final AuthenticationManager authenticationManager;
+  private final JwtService jwtService;
+  private final JwtProperties jwtProperties;
+  private final GoogleTokenService googleTokenService;
+  private final AuditLogRepository auditLogRepository;
+  private final NotificationRepository notificationRepository;
+  private final EmailService emailService;
+  private final SmsService smsService;
 
-    private final AppUserRepository userRepository;
-    private final RoleRepository roleRepository;
-    private final RefreshTokenRepository refreshTokenRepository;
-    private final PasswordEncoder passwordEncoder;
-    private final AuthenticationManager authenticationManager;
-    private final JwtService jwtService;
-    private final JwtProperties jwtProperties;
-    private final GoogleTokenService googleTokenService;
-    private final AuditLogRepository auditLogRepository;
-    private final NotificationRepository notificationRepository;
-    private final PasswordResetCodeRepository passwordResetCodeRepository;
-    private final EmailService emailService;
-    private final SmsService smsService;
+  public AuthService(
+      AppUserRepository userRepository,
+      RoleRepository roleRepository,
+      RefreshTokenRepository refreshTokenRepository,
+      PasswordEncoder passwordEncoder,
+      AuthenticationManager authenticationManager,
+      JwtService jwtService,
+      JwtProperties jwtProperties,
+      GoogleTokenService googleTokenService,
+      AuditLogRepository auditLogRepository,
+      NotificationRepository notificationRepository,
+      EmailService emailService,
+      SmsService smsService) {
+    this.userRepository = userRepository;
+    this.roleRepository = roleRepository;
+    this.refreshTokenRepository = refreshTokenRepository;
+    this.passwordEncoder = passwordEncoder;
+    this.authenticationManager = authenticationManager;
+    this.jwtService = jwtService;
+    this.jwtProperties = jwtProperties;
+    this.googleTokenService = googleTokenService;
+    this.auditLogRepository = auditLogRepository;
+    this.notificationRepository = notificationRepository;
+    this.emailService = emailService;
+    this.smsService = smsService;
+  }
 
-    public AuthService(
-            AppUserRepository userRepository,
-            RoleRepository roleRepository,
-            RefreshTokenRepository refreshTokenRepository,
-            PasswordEncoder passwordEncoder,
-            AuthenticationManager authenticationManager,
-            JwtService jwtService,
-            JwtProperties jwtProperties,
-            GoogleTokenService googleTokenService,
-            AuditLogRepository auditLogRepository,
-            NotificationRepository notificationRepository,
-            PasswordResetCodeRepository passwordResetCodeRepository,
-            EmailService emailService,
-            SmsService smsService
-    ) {
-        this.userRepository = userRepository;
-        this.roleRepository = roleRepository;
-        this.refreshTokenRepository = refreshTokenRepository;
-        this.passwordEncoder = passwordEncoder;
-        this.authenticationManager = authenticationManager;
-        this.jwtService = jwtService;
-        this.jwtProperties = jwtProperties;
-        this.googleTokenService = googleTokenService;
-        this.auditLogRepository = auditLogRepository;
-        this.notificationRepository = notificationRepository;
-        this.passwordResetCodeRepository = passwordResetCodeRepository;
-        this.emailService = emailService;
-        this.smsService = smsService;
+  @Transactional
+  public UserResponse register(RegisterRequest request) {
+    if (!StringUtils.hasText(request.roleName())
+        || !"HORSE_OWNER".equalsIgnoreCase(request.roleName().trim())) {
+      throw new AuthException(
+          "Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
     }
-
-    @Transactional
-    public UserResponse register(RegisterRequest request) {
-        if (!StringUtils.hasText(request.roleName()) || !"HORSE_OWNER".equalsIgnoreCase(request.roleName().trim())) {
-            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
-        }
-        if (request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new AuthException("Password must not exceed 72 UTF-8 bytes");
-        }
-        if (userRepository.existsByEmailIgnoreCase(request.email())) {
-            throw new AuthException("Email already exists");
-        }
-
-        Role role = findRole(request.roleName());
-        AppUser user = new AppUser(
-                request.fullName(),
-                request.email().trim().toLowerCase(Locale.ROOT),
-                request.phone(),
-                passwordEncoder.encode(request.password()),
-                role
-        );
-
-        boolean autoApprove = !requiresApproval(role);
-        AppUser savedUser = userRepository.save(user);
-        if (autoApprove) {
-            savedUser.approve(null);
-        }
-
-        return UserResponse.from(savedUser);
+    if (request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
+      throw new AuthException("Password must not exceed 72 UTF-8 bytes");
     }
-
-    @Transactional
-    public AuthResponse login(LoginRequest request) {
-        if ("{google-login}".equals(request.password())
-                || request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new AuthException("Email or password is incorrect");
-        }
-        try {
-            authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(request.email(), request.password())
-            );
-        } catch (BadCredentialsException ex) {
-            throw new AuthException("Email or password is incorrect");
-        }
-
-        AppUser user = findUser(request.email());
-        ensureApproved(user);
-        return createAuthResponse(user);
+    if (userRepository.existsByEmailIgnoreCase(request.email())) {
+      throw new AuthException("Email already exists");
     }
-
-    @Transactional
-    public AuthResponse changePassword(String email, ChangePasswordRequest request) {
-        AppUser user = findUser(email);
-        ensureApproved(user);
-        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
-            throw new AuthException("Current password is incorrect");
-        }
-        if (request.newPassword().getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new AuthException("Password must not exceed 72 UTF-8 bytes");
-        }
-        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
-            throw new AuthException("New password must be different from the current password");
-        }
-        user.changePassword(passwordEncoder.encode(request.newPassword()));
-        refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
-        return createAuthResponse(user);
+    Role role = findRole(request.roleName());
+    AppUser user =
+        new AppUser(
+            request.fullName(),
+            request.email().trim().toLowerCase(Locale.ROOT),
+            request.phone(),
+            passwordEncoder.encode(request.password()),
+            role);
+    boolean autoApprove = !requiresApproval(role);
+    AppUser savedUser = userRepository.save(user);
+    if (autoApprove) {
+      savedUser.approve(null);
     }
+    return UserResponse.from(savedUser);
+  }
 
-    @Transactional
-    public MessageResponse forgotPassword(ForgotPasswordRequest request) {
-        AppUser user = userRepository.findByEmailIgnoreCase(request.email())
-                .orElseThrow(() -> new AuthException("Không tìm thấy tài khoản với email này"));
-
-        if (user.getDeletedAt() != null) {
-            throw new AuthException("Tài khoản đã bị xóa khỏi hệ thống");
-        }
-        if (user.getStatus() != UserStatus.APPROVED) {
-            throw new AuthException("Tài khoản đang chờ duyệt hoặc chưa được kích hoạt");
-        }
-
-        // Vô hiệu hóa các mã cũ chưa dùng của email này
-        List<PasswordResetCode> oldCodes = passwordResetCodeRepository.findByEmailIgnoreCaseAndUsedFalse(request.email());
-        for (PasswordResetCode old : oldCodes) {
-            old.setUsed(true);
-        }
-        for (PasswordResetCode old : oldCodes) {
-            passwordResetCodeRepository.save(old);
-        }
-
-        // Sinh mã OTP 6 chữ số ngẫu nhiên
-        String code = String.format("%06d", new java.security.SecureRandom().nextInt(1_000_000));
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime expiresAt = now.plusMinutes(15);
-
-        PasswordResetCode resetCode = new PasswordResetCode(
-                UUID.randomUUID().toString(),
-                user.getId(),
-                user.getEmail(),
-                code,
-                expiresAt,
-                now
-        );
-        passwordResetCodeRepository.save(resetCode);
-
-        // Gửi email và SMS
-        emailService.sendPasswordResetCode(user.getEmail(), user.getFullName(), code);
-        smsService.sendPasswordResetCode(user.getPhone(), code);
-
-        AuditLog auditLog = new AuditLog();
-        auditLog.setId(UUID.randomUUID().toString());
-        auditLog.setUserId(user.getId());
-        auditLog.setActionPerformed("REQUEST_FORGOT_PASSWORD_OTP: " + user.getEmail());
-        auditLog.setCreatedAt(now);
-        auditLogRepository.save(auditLog);
-
-        return new MessageResponse("Mã xác nhận đặt lại mật khẩu đã được gửi đến email " + user.getEmail() + ". Vui lòng kiểm tra hộp thư.");
+  @Transactional
+  public AuthResponse login(LoginRequest request) {
+    if ("{google-login}".equals(request.password())
+        || request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
+      throw new AuthException("Email or password is incorrect");
     }
-
-    @Transactional
-    public MessageResponse resetPassword(ResetPasswordRequest request) {
-        if (request.newPassword().getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new AuthException("Mật khẩu không được vượt quá 72 byte UTF-8");
-        }
-
-        LocalDateTime now = LocalDateTime.now();
-        PasswordResetCode resetCode = passwordResetCodeRepository
-                .findTopByEmailIgnoreCaseAndCodeAndUsedFalseOrderByCreatedAtDesc(request.email(), request.code())
-                .orElseThrow(() -> new AuthException("Mã xác nhận không chính xác hoặc đã được sử dụng"));
-
-        if (resetCode.getExpiresAt().isBefore(now)) {
-            throw new AuthException("Mã xác nhận đã hết hạn (chỉ có hiệu lực trong 15 phút). Vui lòng yêu cầu mã mới.");
-        }
-
-        AppUser user = userRepository.findByEmailIgnoreCase(request.email())
-                .orElseThrow(() -> new AuthException("Không tìm thấy tài khoản tương ứng"));
-
-        if (user.getDeletedAt() != null || user.getStatus() != UserStatus.APPROVED) {
-            throw new AuthException("Tài khoản không ở trạng thái hoạt động");
-        }
-
-        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
-            throw new AuthException("Mật khẩu mới không được trùng với mật khẩu hiện tại");
-        }
-
-        // Cập nhật mật khẩu mới và bỏ cờ bắt buộc đổi mật khẩu
-        user.changePassword(passwordEncoder.encode(request.newPassword()));
-        user.setMustChangePassword(false);
-        userRepository.save(user);
-
-        // Đánh dấu mã đã sử dụng
-        resetCode.setUsed(true);
-        passwordResetCodeRepository.save(resetCode);
-
-        // Thu hồi tất cả refresh token cũ để bảo vệ tài khoản
-        refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
-
-        // Gửi thông báo email
-        emailService.sendPasswordResetSuccess(user.getEmail(), user.getFullName());
-
-        AuditLog auditLog = new AuditLog();
-        auditLog.setId(UUID.randomUUID().toString());
-        auditLog.setUserId(user.getId());
-        auditLog.setActionPerformed("RESET_PASSWORD_SUCCESS: " + user.getEmail());
-        auditLog.setCreatedAt(now);
-        auditLogRepository.save(auditLog);
-
-        return new MessageResponse("Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.");
+    try {
+      authenticationManager.authenticate(
+          new UsernamePasswordAuthenticationToken(request.email(), request.password()));
+    } catch (BadCredentialsException ex) {
+      throw new AuthException("Email or password is incorrect");
     }
+    AppUser user = findUser(request.email());
+    ensureApproved(user);
+    return createAuthResponse(user);
+  }
 
-    @Transactional(noRollbackFor = ApprovalPendingException.class)
-    public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
-        GoogleTokenService.GoogleProfile profile = googleTokenService.verify(request.idToken());
-        AppUser user = userRepository.findByEmailIgnoreCase(profile.email())
-                .orElseGet(() -> createGoogleUser(profile, request.roleName()));
-
-        ensureApproved(user);
-        return createAuthResponse(user);
+  @Transactional
+  public AuthResponse changePassword(String email, ChangePasswordRequest request) {
+    AppUser user = findUser(email);
+    ensureApproved(user);
+    if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+      throw new AuthException("Current password is incorrect");
     }
-
-    @Transactional
-    public AuthResponse refresh(RefreshTokenRequest request) {
-        RefreshToken refreshToken = refreshTokenRepository.findByToken(request.refreshToken())
-                .orElseThrow(() -> new AuthException("Refresh token is invalid"));
-
-        if (refreshToken.isRevoked() || refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
-            throw new AuthException("Refresh token is expired or revoked");
-        }
-
-        AppUser user = refreshToken.getUser();
-        if (user == null || user.getDeletedAt() != null) {
-            throw new AuthException("Account is deleted");
-        }
-        ensureApproved(user);
-        refreshToken.revoke();
-        return createAuthResponse(user, refreshToken.getSessionId());
+    if (request.newPassword().getBytes(StandardCharsets.UTF_8).length > 72) {
+      throw new AuthException("Password must not exceed 72 UTF-8 bytes");
     }
-
-    @Transactional
-    public void logout(String refreshTokenValue) {
-        refreshTokenRepository.findByToken(refreshTokenValue)
-                .ifPresent(token -> refreshTokenRepository.revokeActiveTokensBySessionId(token.getSessionId()));
+    if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+      throw new AuthException("New password must be different from the current password");
     }
+    user.changePassword(passwordEncoder.encode(request.newPassword()));
+    refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+    JwtAuthenticationFilter.invalidateEmail(user.getEmail());
+    return createAuthResponse(user);
+  }
 
-    @Transactional
-    public UserResponse approve(Long userId, String approverEmail) {
-        AppUser approver = requireClubManager(approverEmail);
-        AppUser user = userRepository.findById(java.util.Objects.requireNonNull(userId, "userId must not be null"))
-                .orElseThrow(() -> new AuthException("User not found"));
-        ensurePendingStaff(user);
-        user.approve(approver);
-        recordReviewAuditAndNotification(approver.getId(), user.getId(), "APPROVE_USER: " + user.getId(),
-                "Tài khoản của bạn đã được Club Manager phê duyệt.");
-        return UserResponse.from(user);
+  @Transactional
+  public MessageResponse forgotPassword(ForgotPasswordRequest request) {
+    AppUser user =
+        userRepository
+            .findByEmailIgnoreCase(request.email())
+            .orElseThrow(() -> new AuthException("Không tìm thấy tài khoản với email này"));
+    if (user.getDeletedAt() != null) {
+      throw new AuthException("Tài khoản đã bị xóa khỏi hệ thống");
     }
-
-    @Transactional
-    public UserResponse reject(Long userId, String approverEmail) {
-        AppUser approver = requireClubManager(approverEmail);
-        AppUser user = userRepository.findById(java.util.Objects.requireNonNull(userId, "userId must not be null"))
-                .orElseThrow(() -> new AuthException("User not found"));
-        ensurePendingStaff(user);
-        user.reject(approver);
-        refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
-        recordReviewAuditAndNotification(approver.getId(), user.getId(), "REJECT_USER: " + user.getId(),
-                "Tài khoản của bạn đã bị từ chối bởi Club Manager.");
-        return UserResponse.from(user);
+    if (user.getStatus() != UserStatus.APPROVED) {
+      throw new AuthException("Tài khoản đang chờ duyệt hoặc chưa được kích hoạt");
     }
+    // Sinh mã OTP 6 chữ số ngẫu nhiên và lưu trực tiếp trên user
+    String code = String.format("%06d", new java.security.SecureRandom().nextInt(1_000_000));
+    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime expiresAt = now.plusMinutes(15);
+    user.setResetCode(code);
+    user.setResetCodeExpiresAt(expiresAt);
+    user.setResetCodeUsed(false);
+    userRepository.save(user);
+    // Gửi email và SMS
+    emailService.sendPasswordResetCode(user.getEmail(), user.getFullName(), code);
+    smsService.sendPasswordResetCode(user.getPhone(), code);
+    AuditLog auditLog = new AuditLog();
+    auditLog.setId(UUID.randomUUID().toString());
+    auditLog.setUserId(user.getId());
+    auditLog.setActionPerformed("REQUEST_FORGOT_PASSWORD_OTP: " + user.getEmail());
+    auditLog.setCreatedAt(now);
+    auditLogRepository.save(auditLog);
+    return new MessageResponse(
+        "Mã xác nhận đặt lại mật khẩu đã được gửi đến email "
+            + user.getEmail()
+            + ". Vui lòng kiểm tra hộp thư.");
+  }
 
-    private void recordReviewAuditAndNotification(Long managerId, Long targetUserId, String action, String message) {
-        LocalDateTime now = LocalDateTime.now();
-        AuditLog log = new AuditLog();
-        log.setId(UUID.randomUUID().toString());
-        log.setUserId(managerId);
-        log.setActionPerformed(action);
-        log.setCreatedAt(now);
-        auditLogRepository.save(log);
-
-        Notification notification = new Notification();
-        notification.setId(UUID.randomUUID().toString());
-        notification.setUserId(targetUserId);
-        notification.setRelatedTable("users");
-        notification.setRelatedId(String.valueOf(targetUserId));
-        notification.setMessage(message);
-        notification.setRead(false);
-        notification.setCreatedAt(now);
-        notificationRepository.save(notification);
+  @Transactional
+  public MessageResponse resetPassword(ResetPasswordRequest request) {
+    if (request.newPassword().getBytes(StandardCharsets.UTF_8).length > 72) {
+      throw new AuthException("Mật khẩu không được vượt quá 72 byte UTF-8");
     }
-
-    private AuthResponse createAuthResponse(AppUser user) {
-        return createAuthResponse(user, UUID.randomUUID().toString());
+    LocalDateTime now = LocalDateTime.now();
+    AppUser user =
+        userRepository
+            .findByEmailIgnoreCase(request.email())
+            .orElseThrow(
+                () -> new AuthException("Mã xác nhận không chính xác hoặc đã được sử dụng"));
+    if (user.isResetCodeUsed()
+        || user.getResetCode() == null
+        || !user.getResetCode().equals(request.code())) {
+      throw new AuthException("Mã xác nhận không chính xác hoặc đã được sử dụng");
     }
-
-    private AuthResponse createAuthResponse(AppUser user, String sessionId) {
-        String accessToken = jwtService.createAccessToken(user, sessionId);
-        String refreshTokenValue = UUID.randomUUID().toString() + UUID.randomUUID();
-        RefreshToken refreshToken = new RefreshToken(
-                user,
-                sessionId,
-                refreshTokenValue,
-                LocalDateTime.now().plusDays(jwtProperties.refreshTokenDays())
-        );
-        refreshTokenRepository.save(refreshToken);
-        return new AuthResponse(accessToken, refreshTokenValue, UserResponse.from(user));
+    if (user.getResetCodeExpiresAt() == null || user.getResetCodeExpiresAt().isBefore(now)) {
+      throw new AuthException(
+          "Mã xác nhận đã hết hạn (chỉ có hiệu lực trong 15 phút). Vui lòng yêu cầu mã mới.");
     }
-
-    private AppUser createGoogleUser(GoogleTokenService.GoogleProfile profile, String roleName) {
-        if (StringUtils.hasText(roleName) && !"HORSE_OWNER".equalsIgnoreCase(roleName.trim())) {
-            throw new AuthException("Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
-        }
-
-        Role role = findRole("HORSE_OWNER");
-        AppUser user = new AppUser(
-                profile.fullName(),
-                profile.email().trim().toLowerCase(Locale.ROOT),
-                null,
-                passwordEncoder.encode(UUID.randomUUID().toString()),
-                role
-        );
-
-        boolean autoApprove = !requiresApproval(role);
-        AppUser savedUser = userRepository.save(user);
-        if (autoApprove) {
-            savedUser.approve(null);
-        }
-
-        return savedUser;
+    if (user.getDeletedAt() != null || user.getStatus() != UserStatus.APPROVED) {
+      throw new AuthException("Tài khoản không ở trạng thái hoạt động");
     }
-
-    private Role findRole(String roleName) {
-        return roleRepository.findByName(roleName.trim().toUpperCase(Locale.ROOT))
-                .orElseThrow(() -> new AuthException("Role not found"));
+    if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+      throw new AuthException("Mật khẩu mới không được trùng với mật khẩu hiện tại");
     }
+    // Cập nhật mật khẩu mới, bỏ cờ bắt buộc đổi mật khẩu và đánh dấu mã đã sử dụng
+    user.changePassword(passwordEncoder.encode(request.newPassword()));
+    user.setMustChangePassword(false);
+    user.setResetCodeUsed(true);
+    userRepository.save(user);
+    // Thu hồi tất cả refresh token cũ để bảo vệ tài khoản
+    refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+    JwtAuthenticationFilter.invalidateEmail(user.getEmail());
+    // Gửi thông báo email
+    emailService.sendPasswordResetSuccess(user.getEmail(), user.getFullName());
+    AuditLog auditLog = new AuditLog();
+    auditLog.setId(UUID.randomUUID().toString());
+    auditLog.setUserId(user.getId());
+    auditLog.setActionPerformed("RESET_PASSWORD_SUCCESS: " + user.getEmail());
+    auditLog.setCreatedAt(now);
+    auditLogRepository.save(auditLog);
+    return new MessageResponse(
+        "Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.");
+  }
 
-    private AppUser findUser(String email) {
-        return userRepository.findByEmailIgnoreCase(email)
-                .orElseThrow(() -> new AuthException("User not found"));
-    }
+  @Transactional(noRollbackFor = ApprovalPendingException.class)
+  public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
+    GoogleTokenService.GoogleProfile profile = googleTokenService.verify(request.idToken());
+    AppUser user =
+        userRepository
+            .findByEmailIgnoreCase(profile.email())
+            .orElseGet(() -> createGoogleUser(profile, request.roleName()));
+    ensureApproved(user);
+    return createAuthResponse(user);
+  }
 
-    @Transactional(readOnly = true)
-    public UserResponse currentUser(String email) {
-        return UserResponse.from(findUser(email));
+  @Transactional
+  public AuthResponse refresh(RefreshTokenRequest request) {
+    RefreshToken refreshToken =
+        refreshTokenRepository
+            .findByToken(request.refreshToken())
+            .orElseThrow(() -> new AuthException("Refresh token is invalid"));
+    if (refreshToken.isRevoked() || refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
+      throw new AuthException("Refresh token is expired or revoked");
     }
+    AppUser user = refreshToken.getUser();
+    if (user == null || user.getDeletedAt() != null) {
+      throw new AuthException("Account is deleted");
+    }
+    ensureApproved(user);
+    refreshToken.revoke();
+    return createAuthResponse(user, refreshToken.getSessionId());
+  }
 
-    private void ensureApproved(AppUser user) {
-        if (user.getDeletedAt() != null) {
-            throw new AuthException("Account is deleted");
-        }
-        if (user.getStatus() == UserStatus.LOCKED) {
-            throw new AuthException("Tài khoản đã bị khóa");
-        }
-        if (user.getStatus() == UserStatus.PENDING && !requiresApproval(user.getRole())) {
-            user.approve(null);
-        }
-        if (user.getStatus() == UserStatus.PENDING) {
-            throw new ApprovalPendingException();
-        }
-        if (user.getStatus() != UserStatus.APPROVED) {
-            throw new AuthException("User is not approved");
-        }
-    }
+  @Transactional
+  public void logout(String refreshTokenValue) {
+    refreshTokenRepository
+        .findByToken(refreshTokenValue)
+        .ifPresent(
+            token -> {
+              refreshTokenRepository.revokeActiveTokensBySessionId(token.getSessionId());
+              JwtAuthenticationFilter.invalidateSession(token.getSessionId());
+            });
+  }
 
-    private boolean requiresApproval(Role role) {
-        return !"HORSE_OWNER".equals(role.getName());
-    }
+  @Transactional
+  public UserResponse approve(Long userId, String approverEmail) {
+    AppUser approver = requireClubManager(approverEmail);
+    AppUser user =
+        userRepository
+            .findById(java.util.Objects.requireNonNull(userId, "userId must not be null"))
+            .orElseThrow(() -> new AuthException("User not found"));
+    ensurePendingStaff(user);
+    user.approve(approver);
+    recordReviewAuditAndNotification(
+        approver.getId(),
+        user.getId(),
+        "APPROVE_USER: " + user.getId(),
+        "Tài khoản của bạn đã được Club Manager phê duyệt.");
+    return UserResponse.from(user);
+  }
 
-    private AppUser requireClubManager(String email) {
-        AppUser manager = findUser(email);
-        ensureApproved(manager);
-        if (manager.isMustChangePassword() || !"CLUB_MANAGER".equals(manager.getRole().getName())) {
-            throw new AuthException("Only an active Club Manager can review accounts");
-        }
-        return manager;
-    }
+  @Transactional
+  public UserResponse reject(Long userId, String approverEmail) {
+    AppUser approver = requireClubManager(approverEmail);
+    AppUser user =
+        userRepository
+            .findById(java.util.Objects.requireNonNull(userId, "userId must not be null"))
+            .orElseThrow(() -> new AuthException("User not found"));
+    ensurePendingStaff(user);
+    user.reject(approver);
+    refreshTokenRepository.revokeActiveTokensByUserId(user.getId());
+    JwtAuthenticationFilter.invalidateEmail(user.getEmail());
+    recordReviewAuditAndNotification(
+        approver.getId(),
+        user.getId(),
+        "REJECT_USER: " + user.getId(),
+        "Tài khoản của bạn đã bị từ chối bởi Club Manager.");
+    return UserResponse.from(user);
+  }
 
-    private void ensurePendingStaff(AppUser user) {
-        if (user.getDeletedAt() != null || user.getStatus() != UserStatus.PENDING
-                || !REVIEWABLE_ROLES.contains(user.getRole().getName())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Only pending staff accounts can be reviewed");
-        }
+  private void recordReviewAuditAndNotification(
+      Long managerId, Long targetUserId, String action, String message) {
+    LocalDateTime now = LocalDateTime.now();
+    AuditLog log = new AuditLog();
+    log.setId(UUID.randomUUID().toString());
+    log.setUserId(managerId);
+    log.setActionPerformed(action);
+    log.setCreatedAt(now);
+    auditLogRepository.save(log);
+    Notification notification = new Notification();
+    notification.setId(UUID.randomUUID().toString());
+    notification.setUserId(targetUserId);
+    notification.setRelatedTable("users");
+    notification.setRelatedId(String.valueOf(targetUserId));
+    notification.setMessage(message);
+    notification.setRead(false);
+    notification.setCreatedAt(now);
+    notificationRepository.save(notification);
+  }
+
+  private AuthResponse createAuthResponse(AppUser user) {
+    return createAuthResponse(user, UUID.randomUUID().toString());
+  }
+
+  private AuthResponse createAuthResponse(AppUser user, String sessionId) {
+    String accessToken = jwtService.createAccessToken(user, sessionId);
+    String refreshTokenValue = UUID.randomUUID().toString() + UUID.randomUUID();
+    RefreshToken refreshToken =
+        new RefreshToken(
+            user,
+            sessionId,
+            refreshTokenValue,
+            LocalDateTime.now().plusDays(jwtProperties.refreshTokenDays()));
+    refreshTokenRepository.save(refreshToken);
+    return new AuthResponse(accessToken, refreshTokenValue, UserResponse.from(user));
+  }
+
+  private AppUser createGoogleUser(GoogleTokenService.GoogleProfile profile, String roleName) {
+    if (StringUtils.hasText(roleName) && !"HORSE_OWNER".equalsIgnoreCase(roleName.trim())) {
+      throw new AuthException(
+          "Chỉ Chủ ngựa có thể tự đăng ký. Vui lòng liên hệ Club Manager để được cấp tài khoản.");
     }
+    Role role = findRole("HORSE_OWNER");
+    AppUser user =
+        new AppUser(
+            profile.fullName(),
+            profile.email().trim().toLowerCase(Locale.ROOT),
+            null,
+            passwordEncoder.encode(UUID.randomUUID().toString()),
+            role);
+    boolean autoApprove = !requiresApproval(role);
+    AppUser savedUser = userRepository.save(user);
+    if (autoApprove) {
+      savedUser.approve(null);
+    }
+    return savedUser;
+  }
+
+  private Role findRole(String roleName) {
+    return roleRepository
+        .findByName(roleName.trim().toUpperCase(Locale.ROOT))
+        .orElseThrow(() -> new AuthException("Role not found"));
+  }
+
+  private AppUser findUser(String email) {
+    return userRepository
+        .findByEmailIgnoreCase(email)
+        .orElseThrow(() -> new AuthException("User not found"));
+  }
+
+  @Transactional(readOnly = true)
+  public UserResponse currentUser(String email) {
+    return UserResponse.from(findUser(email));
+  }
+
+  private void ensureApproved(AppUser user) {
+    if (user.getDeletedAt() != null) {
+      throw new AuthException("Account is deleted");
+    }
+    if (user.getStatus() == UserStatus.LOCKED) {
+      throw new AuthException("Tài khoản đã bị khóa");
+    }
+    if (user.getStatus() == UserStatus.PENDING && !requiresApproval(user.getRole())) {
+      user.approve(null);
+    }
+    if (user.getStatus() == UserStatus.PENDING) {
+      throw new ApprovalPendingException();
+    }
+    if (user.getStatus() != UserStatus.APPROVED) {
+      throw new AuthException("User is not approved");
+    }
+  }
+
+  private boolean requiresApproval(Role role) {
+    return !"HORSE_OWNER".equals(role.getName());
+  }
+
+  private AppUser requireClubManager(String email) {
+    AppUser manager = findUser(email);
+    ensureApproved(manager);
+    if (manager.isMustChangePassword() || !"CLUB_MANAGER".equals(manager.getRole().getName())) {
+      throw new AuthException("Only an active Club Manager can review accounts");
+    }
+    return manager;
+  }
+
+  private void ensurePendingStaff(AppUser user) {
+    if (user.getDeletedAt() != null
+        || user.getStatus() != UserStatus.PENDING
+        || !REVIEWABLE_ROLES.contains(user.getRole().getName())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Only pending staff accounts can be reviewed");
+    }
+  }
 }

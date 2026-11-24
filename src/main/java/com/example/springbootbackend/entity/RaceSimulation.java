@@ -70,6 +70,9 @@ public class RaceSimulation {
     @Column(name = "stopped_at")
     private LocalDateTime stoppedAt;
 
+    @Column(name = "readings_json", columnDefinition = "TEXT")
+    private String readingsJson;
+
     public String getId() {
         return id;
     }
@@ -204,5 +207,13 @@ public class RaceSimulation {
 
     public void setStoppedAt(LocalDateTime stoppedAt) {
         this.stoppedAt = stoppedAt;
+    }
+
+    public String getReadingsJson() {
+        return readingsJson;
+    }
+
+    public void setReadingsJson(String readingsJson) {
+        this.readingsJson = readingsJson;
     }
 }

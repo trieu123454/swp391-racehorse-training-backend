@@ -60,5 +60,23 @@ public interface HorseRegistrationRequestRepository extends JpaRepository<HorseR
 
     boolean existsByApprovedHorseIdAndStatus(String approvedHorseId, String status);
 
+    long countByStatus(String status);
+
+    List<HorseRegistrationRequest> findByApprovedHorseIdAndStatusIn(
+            String approvedHorseId, List<String> statuses);
+
+    @Query("select case when count(r) > 0 then true else false end "
+            + "from HorseRegistrationRequest r where r.ownerId = :ownerId "
+            + "and r.requestType = :requestType and r.status in :statuses "
+            + "and lower(r.horseName) = lower(:horseName) "
+            + "and (:requestType = 'LINK' or :birthYear is null or r.birthYear = :birthYear) "
+            + "and (:excludeId is null or r.id <> :excludeId)")
+    boolean existsDuplicateActiveRequest(@Param("ownerId") Long ownerId,
+            @Param("requestType") String requestType,
+            @Param("statuses") List<String> statuses,
+            @Param("horseName") String horseName,
+            @Param("birthYear") Integer birthYear,
+            @Param("excludeId") String excludeId);
+
     List<HorseRegistrationRequest> findAllByOrderByCreatedAtDescIdDesc();
 }

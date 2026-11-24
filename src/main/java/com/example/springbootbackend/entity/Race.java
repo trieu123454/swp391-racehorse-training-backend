@@ -43,6 +43,12 @@ public class Race {
     @Column(name = "is_simulated", nullable = false)
     private boolean simulated = false;
 
+    @Column(name = "status", nullable = false, length = 20)
+    private String status = "Scheduled";
+
+    @Column(name = "cancel_reason", length = 255)
+    private String cancelReason;
+
     public String getId() {
         return id;
     }
@@ -113,5 +119,21 @@ public class Race {
 
     public void setSimulated(boolean simulated) {
         this.simulated = simulated;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public String getCancelReason() {
+        return cancelReason;
+    }
+
+    public void setCancelReason(String cancelReason) {
+        this.cancelReason = cancelReason;
     }
 }

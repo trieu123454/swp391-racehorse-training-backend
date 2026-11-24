@@ -14,20 +14,50 @@ import org.springframework.web.bind.annotation.*;
 @PreAuthorize("hasRole('CLUB_MANAGER')")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class HorseRegistrationReviewController {
-    private final HorseRegistrationService service;
+  private final HorseRegistrationService service;
 
-    public HorseRegistrationReviewController(HorseRegistrationService service) {
-        this.service = service;
-    }
+  public HorseRegistrationReviewController(HorseRegistrationService service) {
+    this.service = service;
+  }
 
-    @GetMapping
-    public List<Map<String, Object>> pending(Principal principal) {
-        return service.pendingRequests(principal.getName());
-    }
+  @GetMapping
+  public List<Map<String, Object>> list(
+      Principal principal, @RequestParam(name = "status", required = false) String status) {
+    return service.managerRequests(principal.getName(), status);
+  }
 
-    @PatchMapping("/{requestId}")
-    public Map<String, Object> review(Principal principal, HttpServletRequest request,
-            @PathVariable("requestId") String requestId, @RequestBody JsonNode body) {
-        return service.review(principal.getName(), requestId, body, request.getRemoteAddr());
-    }
+  @GetMapping("/pending-count")
+  public Map<String, Object> pendingCount(Principal principal) {
+    return service.pendingRequestCount(principal.getName());
+  }
+
+  @GetMapping("/{id}/documents/{docId}/url")
+  public Map<String, Object> documentUrl(
+      Principal principal,
+      @PathVariable("id") String requestId,
+      @PathVariable("docId") String docId,
+      @RequestParam(name = "download", defaultValue = "false") boolean download) {
+    return service.freshDocumentUrlForManager(principal.getName(), requestId, docId, download);
+  }
+
+  @PatchMapping("/{id}")
+  @io.swagger.v3.oas.annotations.parameters.RequestBody(
+      content =
+          @io.swagger.v3.oas.annotations.media.Content(
+              schema =
+                  @io.swagger.v3.oas.annotations.media.Schema(
+                      implementation =
+                          com.example.springbootbackend.dto.request.ReviewHorseRegistrationRequest
+                              .class)))
+  public Map<String, Object> review(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("id") String requestId,
+      @RequestBody JsonNode body) {
+    return service.review(
+        principal.getName(),
+        requestId,
+        HorseRegistrationService.aliases(body),
+        request.getRemoteAddr());
+  }
 }

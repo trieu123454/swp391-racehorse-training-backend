@@ -18,7 +18,7 @@ public interface RaceSimulationRepository extends JpaRepository<RaceSimulation, 
             WHERE rs.modelVersion >= 2
               AND (rs.status = 'Running'
                    OR (rs.status = 'Interrupted'
-                       AND NOT EXISTS (SELECT 1 FROM RaceSimulationMetric m WHERE m.simulationId = rs.id)))
+                       AND EXISTS (SELECT 1 FROM RaceSimulationHorse sh WHERE sh.id.simulationId = rs.id AND sh.finishTimeSeconds IS NULL)))
             """)
     List<String> findIdsRequiringMaintenance();
 }

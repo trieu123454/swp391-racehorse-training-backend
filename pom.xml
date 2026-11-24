@@ -18,7 +18,8 @@
     <description>Backend REST API for the SWP391 Racehorse Training Management System.</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
         <maven.compiler.parameters>true</maven.compiler.parameters>
         <byte-buddy.version>1.18.10</byte-buddy.version>
     </properties>

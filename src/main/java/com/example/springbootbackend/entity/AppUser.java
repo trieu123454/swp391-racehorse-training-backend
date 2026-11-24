@@ -64,6 +64,15 @@ public class AppUser {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    @Column(name = "reset_code", length = 6)
+    private String resetCode;
+
+    @Column(name = "reset_code_expires_at")
+    private LocalDateTime resetCodeExpiresAt;
+
+    @Column(name = "reset_code_used", nullable = false)
+    private boolean resetCodeUsed = true;
+
     protected AppUser() {
     }
 
@@ -208,5 +217,29 @@ public class AppUser {
     public void changePassword(String passwordHash) {
         this.passwordHash = passwordHash;
         this.mustChangePassword = false;
+    }
+
+    public String getResetCode() {
+        return resetCode;
+    }
+
+    public void setResetCode(String resetCode) {
+        this.resetCode = resetCode;
+    }
+
+    public LocalDateTime getResetCodeExpiresAt() {
+        return resetCodeExpiresAt;
+    }
+
+    public void setResetCodeExpiresAt(LocalDateTime resetCodeExpiresAt) {
+        this.resetCodeExpiresAt = resetCodeExpiresAt;
+    }
+
+    public boolean isResetCodeUsed() {
+        return resetCodeUsed;
+    }
+
+    public void setResetCodeUsed(boolean resetCodeUsed) {
+        this.resetCodeUsed = resetCodeUsed;
     }
 }

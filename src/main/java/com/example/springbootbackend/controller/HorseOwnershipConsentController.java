@@ -19,20 +19,32 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasRole('HORSE_OWNER')")
 @io.swagger.v3.oas.annotations.security.SecurityRequirement(name = "bearerAuth")
 public class HorseOwnershipConsentController {
-    private final HorseRegistrationService service;
+  private final HorseRegistrationService service;
+  private final com.example.springbootbackend.service.HorseOwnerRequestService outgoing;
 
-    public HorseOwnershipConsentController(HorseRegistrationService service) {
-        this.service = service;
-    }
+  public HorseOwnershipConsentController(
+      HorseRegistrationService service,
+      com.example.springbootbackend.service.HorseOwnerRequestService outgoing) {
+    this.service = service;
+    this.outgoing = outgoing;
+  }
 
-    @GetMapping
-    public List<Map<String, Object>> pending(Principal principal) {
-        return service.transferRequests(principal.getName());
-    }
+  @GetMapping
+  public List<Map<String, Object>> pending(Principal principal) {
+    var result = new java.util.ArrayList<>(service.transferRequests(principal.getName()));
+    var submissions = outgoing.transfers(principal.getName());
+    @SuppressWarnings("unchecked")
+    var items = (List<Map<String, Object>>) submissions.get("items");
+    result.addAll(items);
+    return result;
+  }
 
-    @PatchMapping("/{requestId}/consent")
-    public Map<String, Object> respond(Principal principal, HttpServletRequest request,
-            @PathVariable("requestId") String requestId, @RequestBody JsonNode body) {
-        return service.respondToTransfer(principal.getName(), requestId, body, request.getRemoteAddr());
-    }
+  @PatchMapping("/{requestId}/consent")
+  public Map<String, Object> respond(
+      Principal principal,
+      HttpServletRequest request,
+      @PathVariable("requestId") String requestId,
+      @RequestBody JsonNode body) {
+    return service.respondToTransfer(principal.getName(), requestId, body, request.getRemoteAddr());
+  }
 }

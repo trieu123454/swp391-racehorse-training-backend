@@ -32,6 +32,15 @@ Uploaded paths are private. The incident record accepts an upload path created b
 ## Veterinarian incident intake
 
 `GET /api/vet/stable-incidents?status=Pending` lets Veterinarians review Groom reports, including the horse's box, current health/readiness, and attached image URL.
+For a doctor roster, use `GET /api/veterinarians`. To assign a reported incident, a Club Manager can load `/api/club-manager/groom-incidents/assignees` and submit `assigned_role: "VETERINARIAN"` with the selected `assignee_id` to the assignment endpoint below.
+
+```json
+{
+  "assigned_role": "VETERINARIAN",
+  "assignee_id": 17,
+  "assignment_note": "Kiểm tra tình trạng chân và cập nhật kết quả xử lý"
+}
+```
 
 ## Club Manager
 

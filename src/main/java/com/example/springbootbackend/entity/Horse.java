@@ -26,6 +26,9 @@ public class Horse {
     @Column(name = "breed", length = 50)
     private String breed;
 
+    @Column(name = "gender", length = 20)
+    private String gender;
+
     @Column(name = "birth_year")
     private Integer birthYear;
 
@@ -78,6 +81,9 @@ public class Horse {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "ownership_history_json", columnDefinition = "TEXT")
+    private String ownershipHistoryJson;
+
     public String getId() {
         return id;
     }
@@ -100,6 +106,14 @@ public class Horse {
 
     public void setBreed(String breed) {
         this.breed = breed;
+    }
+
+    public String getGender() {
+        return gender;
+    }
+
+    public void setGender(String gender) {
+        this.gender = gender;
     }
 
     public Integer getBirthYear() {
@@ -236,5 +250,13 @@ public class Horse {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getOwnershipHistoryJson() {
+        return ownershipHistoryJson;
+    }
+
+    public void setOwnershipHistoryJson(String ownershipHistoryJson) {
+        this.ownershipHistoryJson = ownershipHistoryJson;
     }
 }

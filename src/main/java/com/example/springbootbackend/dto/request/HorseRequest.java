@@ -18,6 +18,7 @@ import jakarta.validation.constraints.Size;
 public record HorseRequest(
         @JsonAlias("horse_name") @NotBlank(message = "Tên ngựa không được để trống") @Size(min = 2, max = 100) String horseName,
         @Size(max = 50) String breed,
+        @Size(max = 20) String gender,
         @JsonAlias("birth_year") @Min(1900) Integer birthYear,
         @JsonAlias("height_cm") @DecimalMin("50.0") @DecimalMax("250.0") @Digits(integer = 3, fraction = 1) BigDecimal heightCm,
         @JsonProperty("currentWeightKg") @JsonAlias("current_weight_kg") @DecimalMin("100.0") @DecimalMax("900.0") @Digits(integer = 3, fraction = 2) BigDecimal currentWeightKg,

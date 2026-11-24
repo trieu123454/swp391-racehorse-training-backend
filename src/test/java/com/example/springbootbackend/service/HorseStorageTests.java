@@ -1,5 +1,8 @@
 package com.example.springbootbackend.service;
 
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -7,58 +10,214 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import org.springframework.web.server.ResponseStatusException;
 
 class HorseStorageTests {
-    @Test void uploadsBinaryRegistersPathAndSignsWithoutExposingSecret() throws Exception {
-        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        var seenKey = new AtomicReference<String>();
-        var seenBody = new AtomicReference<byte[]>();
-        server.createContext("/storage/v1/object/", exchange -> {
-            seenKey.set(exchange.getRequestHeaders().getFirst("apikey"));
-            seenBody.set(exchange.getRequestBody().readAllBytes());
-            String body = exchange.getRequestURI().getPath().contains("/sign/")
-                    ? "{\"signedURL\":\"/object/sign/horse-images/horses/photo.png?token=test\"}"
-                    : "{\"Key\":\"uploaded\"}";
-            byte[] response = body.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, response.length);
-            exchange.getResponseBody().write(response);
-            exchange.close();
-        });
-        server.start();
-        try {
-            var db = mock(VetData.class);
-            var time = mock(VetTime.class);
-            var uploadedAt = java.time.LocalDateTime.of(2026, 10, 6, 3, 0);
-            when(time.utcNow()).thenReturn(uploadedAt);
-            var storage = new HorseStorage("http://127.0.0.1:" + server.getAddress().getPort(), "test-secret", "horse-images", "supabase", "", "", "", db, new ObjectMapper(), time);
-            byte[] png = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
-            var result = storage.upload(new MockMultipartFile("file", "horse.png", "image/png", png), 7L);
-            String path = (String) result.get("imagePath");
-            assertThat(path).matches("horses/[a-f0-9-]{36}\\.png");
-            assertThat(seenKey.get()).isEqualTo("test-secret");
-            assertThat(seenBody.get()).isEqualTo(png);
-            verify(db).update("INSERT INTO horse_image_uploads(object_path,uploaded_by,created_at) VALUES (?,?,?)", path, 7L, uploadedAt);
-            assertThat(storage.signedUrl(path).get("url").toString()).contains("/storage/v1/object/sign/").doesNotContain("test-secret");
-            assertThat(new String(seenBody.get(), StandardCharsets.UTF_8)).contains("300");
-        } finally {
-            server.stop(0);
-        }
-    }
+  @Test
+  void emptyImagesAndLegacyCloudinaryMarkersKeepMetadataContract() {
+    var storage = new HorseStorage("", "", "horse-images", mock(VetData.class), new ObjectMapper());
+    assertThat(storage.signedUrl(null)).containsEntry("hasImage", false);
+    assertThat(storage.signedUrl("  ")).containsEntry("hasImage", false);
+    var cloudinary = mock(CloudinaryHorseImages.class);
+    org.springframework.test.util.ReflectionTestUtils.setField(
+        storage, "cloudinaryImages", cloudinary);
+    String path = "horses/cloudinary/e298ed64-ae0f-3e0c-8a1d-cfab1a8b910e.jpg";
+    when(cloudinary.resolve(path))
+        .thenReturn(
+            java.util.Map.of(
+                "hasImage",
+                true,
+                "url",
+                "https://res.cloudinary.com/demo/image/upload/horses/real.png"));
+    assertThat(storage.signedUrl(path)).containsEntry("hasImage", true);
+    verify(cloudinary).resolve(path);
+  }
 
-    @Test void storageFailureDoesNotRegisterAnImage() throws Exception {
-        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/", exchange -> { exchange.sendResponseHeaders(503, -1); exchange.close(); });
-        server.start();
-        try {
-            var db = mock(VetData.class);
-            var storage = new HorseStorage("http://127.0.0.1:" + server.getAddress().getPort(), "test-secret", "horse-images", db, new ObjectMapper());
-            byte[] png = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
-            assertThatThrownBy(() -> storage.upload(new MockMultipartFile("file", "horse.png", "image/png", png), 7L)).hasMessageContaining("502");
-            verifyNoInteractions(db);
-        } finally {
-            server.stop(0);
-        }
+  @Test
+  void missingSupabaseObjectReturns404InsteadOfBadGateway() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/",
+        exchange -> {
+          byte[] response =
+              "{\"statusCode\":\"404\",\"error\":\"not_found\"}".getBytes(StandardCharsets.UTF_8);
+          exchange.sendResponseHeaders(400, response.length);
+          exchange.getResponseBody().write(response);
+          exchange.close();
+        });
+    server.start();
+    try {
+      var storage =
+          new HorseStorage(
+              "http://127.0.0.1:" + server.getAddress().getPort(),
+              "key",
+              "horse-images",
+              mock(VetData.class),
+              new ObjectMapper());
+      assertThatThrownBy(() -> storage.signedUrl("horses/e298ed64-ae0f-3e0c-8a1d-cfab1a8b910e.jpg"))
+          .hasMessageContaining("404");
+    } finally {
+      server.stop(0);
     }
+  }
+
+  @Test
+  void uploadsBinaryRegistersPathAndSignsWithoutExposingSecret() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    var seenKey = new AtomicReference<String>();
+    var seenBody = new AtomicReference<byte[]>();
+    server.createContext(
+        "/storage/v1/object/",
+        exchange -> {
+          seenKey.set(exchange.getRequestHeaders().getFirst("apikey"));
+          seenBody.set(exchange.getRequestBody().readAllBytes());
+          String body =
+              exchange.getRequestURI().getPath().contains("/sign/")
+                  ? "{\"signedURL\":\"/object/sign/horse-images/horses/photo.png?token=test\"}"
+                  : "{\"Key\":\"uploaded\"}";
+          byte[] response = body.getBytes(StandardCharsets.UTF_8);
+          exchange.sendResponseHeaders(200, response.length);
+          exchange.getResponseBody().write(response);
+          exchange.close();
+        });
+    server.start();
+    try {
+      var db = mock(VetData.class);
+      var time = mock(VetTime.class);
+      var uploadedAt = java.time.LocalDateTime.of(2026, 10, 6, 3, 0);
+      when(time.utcNow()).thenReturn(uploadedAt);
+      var storage =
+          new HorseStorage(
+              "http://127.0.0.1:" + server.getAddress().getPort(),
+              "test-secret",
+              "horse-images",
+              "supabase",
+              "",
+              "",
+              "",
+              db,
+              new ObjectMapper(),
+              time);
+      byte[] png =
+          java.util.Base64.getDecoder()
+              .decode(
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
+      var result = storage.upload(new MockMultipartFile("file", "horse.png", "image/png", png), 7L);
+      String path = (String) result.get("imagePath");
+      assertThat(path).matches("horses/[a-f0-9-]{36}\\.png");
+      assertThat(seenKey.get()).isEqualTo("test-secret");
+      assertThat(seenBody.get()).isEqualTo(png);
+      verify(db)
+          .update(
+              eq(
+                  "INSERT INTO audit_logs(id,user_id,action_performed,ip_address,created_at) VALUES"
+                      + " (?,?,?,?,?)"),
+              anyString(),
+              eq(7L),
+              eq("UPLOAD_HORSE_IMAGE:" + path),
+              eq("127.0.0.1"),
+              eq(uploadedAt));
+      assertThat(storage.signedUrl(path).get("url").toString())
+          .contains("/storage/v1/object/sign/")
+          .doesNotContain("test-secret");
+      assertThat(new String(seenBody.get(), StandardCharsets.UTF_8)).contains("300");
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void storageFailureDoesNotRegisterAnImage() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/",
+        exchange -> {
+          exchange.sendResponseHeaders(503, -1);
+          exchange.close();
+        });
+    server.start();
+    try {
+      var db = mock(VetData.class);
+      var storage =
+          new HorseStorage(
+              "http://127.0.0.1:" + server.getAddress().getPort(),
+              "test-secret",
+              "horse-images",
+              db,
+              new ObjectMapper());
+      byte[] png =
+          java.util.Base64.getDecoder()
+              .decode(
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
+      assertThatThrownBy(
+              () ->
+                  storage.upload(new MockMultipartFile("file", "horse.png", "image/png", png), 7L))
+          .hasMessageContaining("502");
+      verifyNoInteractions(db);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void registrationImageUploadSkipsAuditDbAndSupportsJfif() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/storage/v1/object/",
+        exchange -> {
+          byte[] response = "{\"Key\":\"uploaded\"}".getBytes(StandardCharsets.UTF_8);
+          exchange.sendResponseHeaders(200, response.length);
+          exchange.getResponseBody().write(response);
+          exchange.close();
+        });
+    server.start();
+    try {
+      var db = mock(VetData.class);
+      var storage =
+          new HorseStorage(
+              "http://127.0.0.1:" + server.getAddress().getPort(),
+              "test-secret",
+              "horse-images",
+              db,
+              new ObjectMapper());
+      byte[] jpeg =
+          new byte[] {
+            (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1
+          };
+      String path =
+          storage.uploadRegistrationHorseImage(
+              new MockMultipartFile("horseImage", "photo.jfif", "image/jpeg", jpeg), 7L);
+      assertThat(path).matches("horses/[a-f0-9-]{36}\\.jpg");
+      verifyNoInteractions(db);
+      assertThatThrownBy(
+              () ->
+                  storage.uploadRegistrationDocument(
+                      new MockMultipartFile(
+                          "documents",
+                          "bad.docx",
+                          "application/pdf",
+                          "not-a-pdf-bytes!".getBytes(StandardCharsets.UTF_8))))
+          .hasMessageContaining("PDF");
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void blankPathsReturnNoImageWhileInvalidNonBlankPathStillRejected() {
+    var db = mock(VetData.class);
+    var storage =
+        new HorseStorage(
+            "http://127.0.0.1:1", "test-secret", "horse-images", db, new ObjectMapper());
+    assertThat(storage.signedUrl(null)).containsEntry("hasImage", false);
+    assertThat(storage.signedUrl("")).containsEntry("hasImage", false);
+    assertThat(storage.signedUrl("   ")).containsEntry("hasImage", false);
+    assertThat(storage.signedUrlFresh(" ", null)).containsEntry("hasImage", false);
+    assertThatThrownBy(() -> storage.signedUrl("../etc/passwd"))
+        .isInstanceOf(ResponseStatusException.class)
+        .hasMessageContaining("Đường dẫn tệp không hợp lệ");
+    assertThatThrownBy(() -> storage.signedUrlFresh("../etc/passwd", null))
+        .isInstanceOf(ResponseStatusException.class)
+        .hasMessageContaining("Đường dẫn tệp không hợp lệ");
+  }
 }

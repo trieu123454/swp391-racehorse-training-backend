@@ -44,6 +44,7 @@ public class HorseOwnerService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("horse", horseProfile);
         response.put("health_exams", repository.findHealthExams(horse));
+        response.put("care_schedules", repository.findCareSchedules(horse));
         response.put("training_metrics", repository.findTrainingMetrics(horse));
         response.put("training_schedules", repository.findTrainingSchedules(horse));
         response.put("training_videos", repository.findTrainingVideos(horse));
