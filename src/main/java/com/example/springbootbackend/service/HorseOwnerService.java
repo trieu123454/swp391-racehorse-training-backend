@@ -19,16 +19,36 @@ import org.springframework.web.server.ResponseStatusException;
 public class HorseOwnerService {
     private final HorseOwnerRepository repository;
     private final VetTime time;
+    private final HorseStorage storage;
 
-    public HorseOwnerService(HorseOwnerRepository repository, VetTime time) {
+    public HorseOwnerService(HorseOwnerRepository repository, VetTime time, HorseStorage storage) {
         this.repository = repository;
         this.time = time;
+        this.storage = storage;
     }
 
     public Map<String, Object> horses(String email) {
         long ownerId = requireOwner(email);
         List<Map<String, Object>> items = repository.findHorses(ownerId);
+        storage.attachSignedImageUrls(items);
         return Map.of("items", items, "total", items.size());
+    }
+
+    public Map<String, Object> calendar(String email, UUID horseId) {
+        long ownerId = requireOwner(email);
+        if (horseId != null) {
+            repository.findOwnedHorse(horseId.toString(), ownerId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy ngựa thuộc sở hữu của bạn"));
+        }
+        String horse = horseId == null ? null : horseId.toString();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("training_schedules", horse == null
+                ? repository.findAllTrainingSchedulesForOwner(ownerId)
+                : repository.findTrainingSchedules(horse, ownerId));
+        response.put("care_schedules", horse == null
+                ? repository.findAllCareSchedulesForOwner(ownerId)
+                : repository.findCareSchedules(horse, ownerId));
+        return response;
     }
 
     public Map<String, Object> dashboard(String email, UUID horseId, Integer requestedYear) {
@@ -40,13 +60,14 @@ public class HorseOwnerService {
         String horse = horseId.toString();
         Map<String, Object> horseProfile = repository.findOwnedHorse(horse, ownerId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy ngựa thuộc sở hữu của bạn"));
+        storage.attachSignedImageUrl(horseProfile);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("horse", horseProfile);
         response.put("health_exams", repository.findHealthExams(horse));
-        response.put("care_schedules", repository.findCareSchedules(horse));
+        response.put("care_schedules", repository.findCareSchedules(horse, ownerId));
         response.put("training_metrics", repository.findTrainingMetrics(horse));
-        response.put("training_schedules", repository.findTrainingSchedules(horse));
+        response.put("training_schedules", repository.findTrainingSchedules(horse, ownerId));
         response.put("training_videos", repository.findTrainingVideos(horse));
         response.put("race_history", repository.findRaceHistory(horse));
         response.put("financial_report", financialReport(horse, year));

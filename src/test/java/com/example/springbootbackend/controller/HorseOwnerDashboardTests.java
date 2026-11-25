@@ -181,4 +181,197 @@ class HorseOwnerDashboardTests {
     mvc.perform(get(path()).header("Authorization", "Bearer " + token))
         .andExpect(status().isForbidden());
   }
+
+  @Test
+  void careAndTrainingSchedulesIncludeHistoryAndEnforceOwnerIsolation() throws Exception {
+    long otherOwnerId = users.findByEmailIgnoreCase("other-dashboard@test.com").orElseThrow().getId();
+    String otherHorse = UUID.randomUUID().toString();
+    db.update("INSERT INTO horses(id,horse_name,owner_id) VALUES (?,'OtherHorse',?)", otherHorse, otherOwnerId);
+
+    // Other owner's training & care schedules must never leak
+    String otherTrainEvent = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Training','Training','2026-11-25','07:00:00','08:30:00','Scheduled','training_schedules',?)",
+        otherTrainEvent,
+        otherHorse,
+        UUID.randomUUID().toString());
+    String otherCareRule = UUID.randomUUID().toString();
+    String otherCareEvent = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Vaccination','Vaccination','2026-11-25','08:45:00','10:15:00','Scheduled','Periodic_Care_Schedules',?)",
+        otherCareEvent,
+        otherHorse,
+        otherCareRule);
+    db.update(
+        "INSERT INTO periodic_care_schedules(id,horse_id,care_type,frequency_days,next_due_date,calendar_event_id)"
+            + " VALUES (?,?,'Vaccination',30,'2026-11-25',?)",
+        otherCareRule,
+        otherHorse,
+        otherCareEvent);
+
+    // Current owner's horse: completed + scheduled + cancelled + unbooked due care rule
+    String ruleId = UUID.randomUUID().toString();
+    String scheduledCareEvent = UUID.randomUUID().toString();
+    String completedCareEvent = UUID.randomUUID().toString();
+    String cancelledCareEvent = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO periodic_care_schedules(id,horse_id,care_type,frequency_days,next_due_date)"
+            + " VALUES (?,?,'HoofCheck',30,'2026-12-25')",
+        ruleId,
+        horse);
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'HoofCheck','HoofCheck','2026-12-25','10:30:00','12:00:00','Scheduled','Periodic_Care_Schedules',?)",
+        scheduledCareEvent,
+        horse,
+        ruleId);
+    db.update(
+        "UPDATE periodic_care_schedules SET calendar_event_id=? WHERE id=?",
+        scheduledCareEvent,
+        ruleId);
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'HoofCheck','HoofCheck','2026-11-25','08:45:00','10:15:00','Completed','Periodic_Care_Schedules',?)",
+        completedCareEvent,
+        horse,
+        ruleId);
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'HoofCheck','HoofCheck','2026-11-20','07:00:00','08:30:00','Cancelled','Periodic_Care_Schedules',?)",
+        cancelledCareEvent,
+        horse,
+        ruleId);
+
+    // Unbooked periodic care rule due on 2026-11-28
+    db.update(
+        "INSERT INTO periodic_care_schedules(id,horse_id,care_type,frequency_days,next_due_date,calendar_event_id)"
+            + " VALUES (?,?,'MedicalCheckup',14,'2026-11-28',NULL)",
+        UUID.randomUUID().toString(),
+        horse);
+
+    // Training schedule with mixed-case source_table
+    String trainSchedule = UUID.randomUUID().toString();
+    String trainEvent = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Training','Training','2026-11-25','12:30:00','14:00:00','Scheduled','Training_Schedules',?)",
+        trainEvent,
+        horse,
+        trainSchedule);
+    db.update(
+        "INSERT INTO training_schedules(id,horse_id,calendar_event_id,session_type,track_surface)"
+            + " VALUES (?,?,?,'Training','Dirt')",
+        trainSchedule,
+        horse,
+        trainEvent);
+
+    mvc.perform(get(path()).header("Authorization", "Bearer " + token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.care_schedules.length()").value(3))
+        .andExpect(jsonPath("$.care_schedules[0].event_date").value("2026-12-25"))
+        .andExpect(jsonPath("$.care_schedules[1].event_date").value("2026-11-28"))
+        .andExpect(jsonPath("$.care_schedules[1].is_periodic_due").value(true))
+        .andExpect(jsonPath("$.care_schedules[2].event_date").value("2026-11-25"))
+        .andExpect(jsonPath("$.care_schedules[2].status").value("Completed"))
+        .andExpect(jsonPath("$.training_schedules.length()").value(1))
+        .andExpect(jsonPath("$.training_schedules[0].id").value(trainEvent));
+
+    mvc.perform(
+            get("/api/horse-owner/horses/" + otherHorse + "/dashboard?year=2026")
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void ownerCalendarReturnsAllOwnedHorsesSchedulesWithoutCrossOwnerLeak() throws Exception {
+    long ownerId = users.findByEmailIgnoreCase("dashboard@test.com").orElseThrow().getId();
+    long otherOwnerId = users.findByEmailIgnoreCase("other-dashboard@test.com").orElseThrow().getId();
+    String boxA = UUID.randomUUID().toString();
+    String boxB = UUID.randomUUID().toString();
+    db.update("INSERT INTO stable_boxes(id,box_code,section,capacity) VALUES (?,'T-A04','Stable A',1)", boxA);
+    db.update("INSERT INTO stable_boxes(id,box_code,section,capacity) VALUES (?,'T-B03','Stable B',1)", boxB);
+    db.update("UPDATE horses SET stable_box_id=? WHERE id=?", boxA, horse);
+
+    String horse2 = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO horses(id,horse_name,owner_id,stable_box_id) VALUES (?,'Quarter Horse',?,?)",
+        horse2,
+        ownerId,
+        boxB);
+
+    String otherHorse = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO horses(id,horse_name,owner_id) VALUES (?,'Foreign Horse',?)",
+        otherHorse,
+        otherOwnerId);
+
+    String planId = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO training_plans(id,horse_id,stage_name,start_date,end_date) VALUES (?,?,'Liệu trình VỪA','2026-11-01','2026-11-30')",
+        planId,
+        horse);
+    String ts1 = UUID.randomUUID().toString(), ev1 = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Training','Training','2026-11-25','10:30:00','12:00:00','Scheduled','training_schedules',?)",
+        ev1,
+        horse,
+        ts1);
+    db.update(
+        "INSERT INTO training_schedules(id,horse_id,calendar_event_id,training_plan_id,session_type,track_surface,target_distance_meters)"
+            + " VALUES (?,?,?,?,'Training','Dirt',1200)",
+        ts1,
+        horse,
+        ev1,
+        planId);
+
+    String ts2 = UUID.randomUUID().toString(), ev2 = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Training','Training','2026-11-25','12:30:00','14:00:00','Scheduled','training_schedules',?)",
+        ev2,
+        horse2,
+        ts2);
+    db.update(
+        "INSERT INTO training_schedules(id,horse_id,calendar_event_id,session_type,track_surface)"
+            + " VALUES (?,?,?,'Training','Turf')",
+        ts2,
+        horse2,
+        ev2);
+
+    String foreignEv = UUID.randomUUID().toString();
+    db.update(
+        "INSERT INTO calendar_events(id,horse_id,event_type,title,event_date,start_time,end_time,status,source_table,source_id)"
+            + " VALUES (?,?,'Training','Training','2026-11-25','14:15:00','15:45:00','Scheduled','training_schedules',?)",
+        foreignEv,
+        otherHorse,
+        UUID.randomUUID().toString());
+
+    db.update(
+        "INSERT INTO periodic_care_schedules(id,horse_id,care_type,frequency_days,next_due_date,calendar_event_id)"
+            + " VALUES (?,?,'HoofCheck',30,'2026-11-26',NULL)",
+        UUID.randomUUID().toString(),
+        horse2);
+    db.update(
+        "INSERT INTO periodic_care_schedules(id,horse_id,care_type,frequency_days,next_due_date,calendar_event_id)"
+            + " VALUES (?,?,'Vaccination',30,'2026-11-26',NULL)",
+        UUID.randomUUID().toString(),
+        otherHorse);
+
+    mvc.perform(get("/api/horse-owner/calendar").header("Authorization", "Bearer " + token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.training_schedules.length()").value(2))
+        .andExpect(jsonPath("$.training_schedules[?(@.horse_name=='Cloud')].stage_name").value("Liệu trình VỪA"))
+        .andExpect(jsonPath("$.training_schedules[?(@.horse_name=='Cloud')].box_code").value("T-A04"))
+        .andExpect(jsonPath("$.training_schedules[?(@.horse_name=='Quarter Horse')].box_code").value("T-B03"))
+        .andExpect(jsonPath("$.care_schedules.length()").value(1))
+        .andExpect(jsonPath("$.care_schedules[0].horse_name").value("Quarter Horse"));
+
+    mvc.perform(
+            get("/api/horse-owner/calendar?horseId=" + otherHorse)
+                .header("Authorization", "Bearer " + token))
+        .andExpect(status().isNotFound());
+  }
 }

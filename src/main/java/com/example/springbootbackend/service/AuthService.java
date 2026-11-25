@@ -42,7 +42,6 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-@SuppressWarnings("null")
 public class AuthService {
   private static final Set<String> REVIEWABLE_ROLES =
       Set.of("HEAD_TRAINER", "VETERINARIAN", "HEAD_VETERINARIAN", "GROOM", "CLUB_MANAGER");

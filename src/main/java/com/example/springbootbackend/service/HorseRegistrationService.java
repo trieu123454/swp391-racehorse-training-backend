@@ -473,7 +473,7 @@ public class HorseRegistrationService {
     }
     String horseId;
     if ("REGISTER".equals(request.getRequestType())) {
-      if (body.hasNonNull("horseId"))
+      if (body != null && body.hasNonNull("horseId"))
         throw new ResponseStatusException(BAD_REQUEST, "horseId is only valid for LINK");
       acquireIdentityLocks(db, request.getMicrochipNumber(), request.getPassportNumber());
       UUID stableId =

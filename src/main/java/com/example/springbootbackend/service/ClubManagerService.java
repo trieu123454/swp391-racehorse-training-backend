@@ -322,10 +322,6 @@ public class ClubManagerService {
         now,
         userId);
     revokeActiveRefreshTokens(userId);
-    String message =
-        StringUtils.hasText(reason)
-            ? "Tài khoản bị từ chối. Lý do: " + reason.trim()
-            : "Tài khoản của bạn đã bị từ chối bởi Club Manager.";
     notifyAccount(
         userId,
         ACCOUNT_REJECTED,
@@ -447,10 +443,6 @@ public class ClubManagerService {
         userId);
     revokeActiveRefreshTokens(userId);
     com.example.springbootbackend.security.JwtAuthenticationFilter.invalidateAll();
-    String message =
-        StringUtils.hasText(reason)
-            ? "Tài khoản đã bị khóa. Lý do: " + reason.trim()
-            : "Tài khoản của bạn đã bị khóa.";
     notifyAccount(
         userId,
         ACCOUNT_LOCKED,

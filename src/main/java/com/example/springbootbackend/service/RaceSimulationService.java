@@ -34,7 +34,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class RaceSimulationService {
   private final VetData db;
-  private final SimulationStorage storage;
   private final VetAccess access;
   private final VetAudit audit;
   private final VetTime time;
@@ -46,7 +45,6 @@ public class RaceSimulationService {
 
   public RaceSimulationService(
       VetData db,
-      SimulationStorage storage,
       VetAccess access,
       VetAudit audit,
       VetTime time,
@@ -56,7 +54,6 @@ public class RaceSimulationService {
       RaceSimulationRepository raceSimulationRepository,
       RaceSimulationHorseRepository raceSimulationHorseRepository) {
     this.db = db;
-    this.storage = storage;
     this.access = access;
     this.audit = audit;
     this.time = time;

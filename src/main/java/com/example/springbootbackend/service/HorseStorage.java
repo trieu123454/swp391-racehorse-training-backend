@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -256,7 +257,8 @@ public class HorseStorage {
   }
 
   private Map<String, Object> computeSignedUrl(String path, String downloadFilename) {
-    if (path != null && path.startsWith("registrations/"))
+    if (path == null || path.isBlank()) return Map.of("hasImage", false);
+    if (path.startsWith("registrations/"))
       return Map.of(
           "hasImage",
           true,
@@ -264,7 +266,7 @@ public class HorseStorage {
           registrationStorage.getObject().signedUrl(path),
           "expiresIn",
           300);
-    if (path != null && path.startsWith("horses/cloudinary/") && cloudinaryImages != null)
+    if (path.startsWith("horses/cloudinary/") && cloudinaryImages != null)
       return cloudinaryImages.resolve(path);
     if (path.startsWith("http://") || path.startsWith("https://"))
       return Map.of("hasImage", true, "url", path);
@@ -437,6 +439,8 @@ public class HorseStorage {
       writeFilePart(body, boundary, extension, contentType, bytes);
       writeTextPart(body, boundary, "timestamp", timestamp);
       writeTextPart(body, boundary, "public_id", publicId);
+      String assetFolder = cloudinaryAssetFolder(publicId);
+      if (assetFolder != null) writeTextPart(body, boundary, "asset_folder", assetFolder);
       writeTextPart(body, boundary, "type", deliveryType);
       writeTextPart(body, boundary, "overwrite", "false");
       body.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
@@ -521,6 +525,14 @@ public class HorseStorage {
             .getBytes(StandardCharsets.UTF_8));
   }
 
+  private static String cloudinaryAssetFolder(String publicId) {
+    if (publicId == null) return null;
+    if (publicId.startsWith("horses/")) return "equine/horses";
+    if (publicId.startsWith("horse-documents/")) return "equine/horse-documents";
+    if (publicId.startsWith("incidents/")) return "equine/incidents";
+    return null;
+  }
+
   private static String apiSignature(SortedMap<String, String> parameters, String secret) {
     String serialized =
         String.join(
@@ -603,6 +615,26 @@ public class HorseStorage {
             .replaceAll("sb_secret_[A-Za-z0-9_-]+", "[redacted]")
             .replaceAll("eyJ[A-Za-z0-9_-]+", "[redacted]");
     return detail.length() > 240 ? detail.substring(0, 240) : detail;
+  }
+
+  public void attachSignedImageUrl(Map<String, Object> horse) {
+    if (horse == null) return;
+    Object imgObj = horse.get("image_url");
+    if (imgObj instanceof String path && !path.isBlank()) {
+      try {
+        Map<String, Object> signed = signedUrl(path);
+        if (signed.get("url") instanceof String signedUrl && !signedUrl.isBlank()) {
+          horse.put("image_signed_url", signedUrl);
+        }
+      } catch (Exception ignored) {
+        // Keep non-blocking if storage signing fails for an item
+      }
+    }
+  }
+
+  public void attachSignedImageUrls(List<Map<String, Object>> horses) {
+    if (horses == null || horses.isEmpty()) return;
+    horses.parallelStream().forEach(this::attachSignedImageUrl);
   }
 
   private boolean isMissingObject(int status, String detail) {

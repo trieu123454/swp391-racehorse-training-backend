@@ -24,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(propagation = Propagation.MANDATORY)
 public class TrainingSimulationRecorder {
   private final VetData db;
-  private final SimulationStorage storage;
   private final VetTime time;
   private final NotificationService notifications;
   private final SimulationAlertPolicy alertPolicy;
@@ -33,14 +32,12 @@ public class TrainingSimulationRecorder {
 
   public TrainingSimulationRecorder(
       VetData db,
-      SimulationStorage storage,
       VetTime time,
       NotificationService notifications,
       SimulationAlertPolicy alertPolicy,
       TrainingMetricsLogRepository metricsLogRepository,
       ObjectMapper objectMapper) {
     this.db = db;
-    this.storage = storage;
     this.time = time;
     this.notifications = notifications;
     this.alertPolicy = alertPolicy;

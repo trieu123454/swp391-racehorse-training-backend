@@ -505,7 +505,8 @@ class VeterinarianTests {
   @Test
   void historyFailureRollsBackExamAndAudit() throws Exception {
     String id = createExam();
-    long audits = db.queryForObject("SELECT count(*) FROM audit_logs", Long.class);
+    long audits =
+        Objects.requireNonNull(db.queryForObject("SELECT count(*) FROM audit_logs", Long.class));
     db.execute(
         "ALTER TABLE health_exams ADD CONSTRAINT test_reject_editor CHECK(last_edited_by<0)");
     try {

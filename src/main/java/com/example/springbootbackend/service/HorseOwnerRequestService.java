@@ -21,7 +21,6 @@ public class HorseOwnerRequestService {
   private final RegistrationStorage storage;
   private final com.fasterxml.jackson.databind.ObjectMapper json;
   private final com.example.springbootbackend.service.HorseStorage legacyStorage;
-  private final com.example.springbootbackend.service.CloudinaryHorseImages cloudinary;
   private final HorseRegistrationService modern;
 
   public HorseOwnerRequestService(
@@ -31,7 +30,6 @@ public class HorseOwnerRequestService {
       RegistrationStorage storage,
       com.fasterxml.jackson.databind.ObjectMapper json,
       com.example.springbootbackend.service.HorseStorage legacyStorage,
-      com.example.springbootbackend.service.CloudinaryHorseImages cloudinary,
       HorseRegistrationService modern) {
     this.db = db;
     this.owners = owners;
@@ -39,7 +37,6 @@ public class HorseOwnerRequestService {
     this.storage = storage;
     this.json = json;
     this.legacyStorage = legacyStorage;
-    this.cloudinary = cloudinary;
     this.modern = modern;
   }
 
@@ -186,6 +183,8 @@ public class HorseOwnerRequestService {
     if (input != null && input.birthYear() != null && input.birthYear() > time.today().getYear())
       throw new ResponseStatusException(BAD_REQUEST, "birthYear cannot be in the future");
     if (creating) {
+      if (input == null || name == null)
+        throw new ResponseStatusException(BAD_REQUEST, "horseName is required");
       id = UUID.randomUUID().toString();
       db.update(
           "INSERT INTO horse_registration_requests(id,owner_id,request_type,horse_name,created_at)"

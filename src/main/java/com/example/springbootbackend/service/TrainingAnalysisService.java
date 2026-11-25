@@ -43,14 +43,15 @@ public class TrainingAnalysisService {
       throw VetException.invalid("from", "Khoang bao cao phai tu 0 den 366 ngay");
     // V40 moved simulation results onto participant rows. Detect the schema,
     // not query failures: missing tables or other SQL errors must still surface.
-    boolean consolidated =
+    String metricSource =
         db.queryForObject(
-                "SELECT count(*) FROM information_schema.columns "
-                    + "WHERE table_schema=current_schema() AND table_name='race_simulation_horses' "
-                    + "AND column_name='metric_id'",
-                Integer.class)
-            > 0;
-    String metricSource = consolidated ? "race_simulation_horses" : "race_simulation_metrics";
+                    "SELECT count(*) FROM information_schema.columns "
+                        + "WHERE table_schema=current_schema() AND table_name='race_simulation_horses' "
+                        + "AND column_name='metric_id'",
+                    Integer.class)
+                > 0
+            ? "race_simulation_horses"
+            : "race_simulation_metrics";
     var sessions =
         db.query(
             "SELECT ts.*,ce.event_date,ce.start_time,ce.end_time,g.full_name AS groom_name,sim.id"
@@ -64,7 +65,9 @@ public class TrainingAnalysisService {
                 + " sim.model_version>=2 AND NOT EXISTS (SELECT 1 FROM race_simulations newer WHERE"
                 + " newer.training_schedule_id=sim.training_schedule_id AND"
                 + " (newer.created_at>sim.created_at OR (newer.created_at=sim.created_at AND"
-                + " newer.id>sim.id))) LEFT JOIN race_simulation_horses m ON m.simulation_id=sim.id"
+                + " newer.id>sim.id))) LEFT JOIN "
+                + metricSource
+                + " m ON m.simulation_id=sim.id"
                 + " AND m.horse_id=ts.horse_id AND m.metric_id IS NOT NULL WHERE ts.horse_id=? AND"
                 + " ce.event_date BETWEEN ? AND ? ORDER BY ce.event_date,ce.start_time,ts.id",
             VetRows.MAPPER,

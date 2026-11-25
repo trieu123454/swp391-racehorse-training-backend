@@ -363,7 +363,9 @@ class HorseRegistrationMultipartTests {
 
   @Test
   void rollsBackOnStorageFailureAndRejectsPublicBucket() throws Exception {
-    long before = db.queryForObject("SELECT count(*) FROM horse_registration_requests", Long.class);
+    long before =
+        Objects.requireNonNull(
+            db.queryForObject("SELECT count(*) FROM horse_registration_requests", Long.class));
     failUpload = true;
     assertThat(
             send(

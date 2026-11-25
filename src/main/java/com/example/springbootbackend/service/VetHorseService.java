@@ -23,6 +23,7 @@ public class VetHorseService {
   private final VetTime time;
   private final NotificationService notifications;
   private final TrainingSimulationRecorder simulationRecorder;
+  private final HorseStorage storage;
 
   public VetHorseService(
       VetData data,
@@ -30,20 +31,22 @@ public class VetHorseService {
       VetAudit audit,
       VetTime time,
       NotificationService notifications,
-      TrainingSimulationRecorder simulationRecorder) {
+      TrainingSimulationRecorder simulationRecorder,
+      HorseStorage storage) {
     this.data = data;
     this.access = access;
     this.audit = audit;
     this.time = time;
     this.notifications = notifications;
     this.simulationRecorder = simulationRecorder;
+    this.storage = storage;
   }
 
   public Map<String, Object> overview(String email, String section) {
     access.requireVeterinarian(email);
     String query =
         "SELECT"
-            + " h.id,h.horse_name,h.image_url,h.current_status,h.readiness_status,h.is_training_locked,h.lock_level,h.lock_reason,s.id"
+            + " h.id,h.horse_name,h.image_url,h.breed,h.microchip_number,h.passport_number,h.current_status,h.readiness_status,h.is_training_locked,h.lock_level,h.lock_reason,s.id"
             + " AS box_id,s.box_code,s.section,COALESCE(s.box_type,'Normal') AS box_type FROM"
             + " horses h LEFT JOIN stable_boxes s ON s.id=h.stable_box_id WHERE h.deleted_at IS"
             + " NULL";
@@ -81,6 +84,7 @@ public class VetHorseService {
                 + " s.box_type WHEN 'Quarantine' THEN 1 WHEN 'Injury' THEN 2 ELSE 3 END, s.section,"
                 + " s.box_code",
             VetRows.MAPPER);
+    storage.attachSignedImageUrls(rows);
     return Map.of("counts", counts, "horses", rows, "stables", stables);
   }
 

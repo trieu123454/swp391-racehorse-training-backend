@@ -28,6 +28,12 @@ public class HorseOwnerController {
         return service.horses(principal.getName());
     }
 
+    @GetMapping("/calendar")
+    public Map<String, Object> calendar(Principal principal,
+            @RequestParam(name = "horseId", required = false) UUID horseId) {
+        return service.calendar(principal.getName(), horseId);
+    }
+
     @GetMapping("/horses/{horseId}/dashboard")
     public Map<String, Object> dashboard(Principal principal, @PathVariable("horseId") UUID horseId,
             @RequestParam(name = "year", required = false) Integer year) {

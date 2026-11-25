@@ -23,8 +23,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /** Authenticates incoming HTTP requests using Bearer JWT tokens. */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
-  private static final long AUTH_CACHE_TTL_MS = 15_000L;
-
   public record VerifiedActor(long userId, String role) {}
 
   private record CachedAuth(long userId, String role, long expiresAtMs) {}
