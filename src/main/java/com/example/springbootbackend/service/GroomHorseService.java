@@ -56,15 +56,44 @@ public class GroomHorseService {
     public Map<String, Object> calendar(String email, LocalDate requestedDate) {
         long groomId = access.requireRole(email, "GROOM");
         LocalDate date = requestedDate == null ? time.today() : requestedDate;
+        List<Map<String, Object>> events = queryCalendarEvents(groomId, date, date, false);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("date", date);
+        response.put("events", events);
+        return response;
+    }
+
+    public Map<String, Object> calendarRange(String email, LocalDate requestedFrom, LocalDate requestedTo) {
+        long groomId = access.requireRole(email, "GROOM");
+        LocalDate from = requestedFrom != null ? requestedFrom : time.today();
+        LocalDate to = requestedTo != null ? requestedTo : from.plusDays(6);
+        if (from.isAfter(to) || java.time.temporal.ChronoUnit.DAYS.between(from, to) > 31) {
+            throw VetException.invalid("from", "Khoảng ngày lịch làm việc không hợp lệ (tối đa 31 ngày)");
+        }
+        List<Map<String, Object>> events = queryCalendarEvents(groomId, from, to, true);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("from", from);
+        response.put("to", to);
+        response.put("events", events);
+        return response;
+    }
+
+    private List<Map<String, Object>> queryCalendarEvents(
+            long groomId, LocalDate from, LocalDate to, boolean includeTaskDates) {
         List<Map<String, Object>> events = new ArrayList<>();
-        var training = db.query("SELECT ts.id AS training_schedule_id,ts.status,ts.session_type,"
-                        + "ce.id AS event_id,ce.event_date,ce.start_time,ce.end_time,ts.notes,"
-                        + "h.id AS horse_id,h.horse_name,EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.training_schedule_id=ts.id AND sim.status='Running') AS sensor_running FROM training_schedules ts "
+        var training = db.query(
+                "SELECT ts.id AS training_schedule_id,ts.status,ts.session_type,ts.track_surface,"
+                        + "ts.snapshot_stage_name AS plan_stage_name,ce.id AS event_id,ce.event_date,"
+                        + "ce.start_time,ce.end_time,ts.notes,h.id AS horse_id,h.horse_name,"
+                        + "h.is_training_locked,h.lock_reason,sb.box_code,"
+                        + "EXISTS (SELECT 1 FROM race_simulations sim WHERE sim.training_schedule_id=ts.id AND sim.status='Running') AS sensor_running "
+                        + "FROM training_schedules ts "
                         + "JOIN calendar_events ce ON ce.id=ts.calendar_event_id "
                         + "JOIN horses h ON h.id=ts.horse_id "
-                        + "WHERE ts.assigned_groom_id=? AND ce.event_date=? AND ce.status<>'Cancelled' "
-                        + "AND h.deleted_at IS NULL ORDER BY ce.start_time NULLS LAST,ce.id",
-                VetRows.MAPPER, groomId, date);
+                        + "LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id "
+                        + "WHERE ts.assigned_groom_id=? AND ce.event_date BETWEEN ? AND ? AND ce.status<>'Cancelled' "
+                        + "AND h.deleted_at IS NULL ORDER BY ce.event_date,ce.start_time NULLS LAST,ce.id",
+                VetRows.MAPPER, groomId, from, to);
         for (Map<String, Object> row : training) {
             Map<String, Object> event = new LinkedHashMap<>();
             event.put("type", "training");
@@ -75,32 +104,44 @@ public class GroomHorseService {
             event.put("end_time", clock(row.get("end_time")));
             event.put("status", row.get("status"));
             event.put("session_type", row.get("session_type"));
+            event.put("track_surface", row.get("track_surface"));
+            event.put("plan_stage_name", row.get("plan_stage_name"));
+            event.put("box_code", row.get("box_code"));
+            event.put("is_training_locked", row.get("is_training_locked"));
+            event.put("lock_reason", row.get("lock_reason"));
             event.put("sensor_running", row.get("sensor_running"));
             event.put("horse", horseRef(row));
             event.put("note", row.get("notes"));
             events.add(event);
         }
-        var tasks = db.query("SELECT t.id AS task_id,t.task_type,t.status,h.id AS horse_id,h.horse_name "
+        var tasks = db.query(
+                "SELECT t.id AS task_id,t.task_type,t.status,ce.event_date,ce.start_time,ce.end_time,"
+                        + "h.id AS horse_id,h.horse_name,sb.box_code "
                         + "FROM daily_task_logs t JOIN calendar_events ce ON ce.id=t.calendar_event_id "
-                        + "JOIN horses h ON h.id=t.horse_id WHERE t.groom_id=? AND ce.event_date=? "
+                        + "JOIN horses h ON h.id=t.horse_id "
+                        + "LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id "
+                        + "WHERE t.groom_id=? AND ce.event_date BETWEEN ? AND ? "
                         + "AND (ce.status IS NULL OR ce.status<>'Cancelled') AND h.deleted_at IS NULL "
-                        + "ORDER BY CASE lower(t.task_type) "
+                        + "ORDER BY ce.event_date,CASE lower(t.task_type) "
                         + "WHEN 'feeding' THEN 0 WHEN 'cleaning' THEN 1 WHEN 'bathing' THEN 2 "
                         + "WHEN 'icebath' THEN 3 ELSE 4 END,t.task_type,h.horse_name,t.id",
-                VetRows.MAPPER, groomId, date);
+                VetRows.MAPPER, groomId, from, to);
         for (Map<String, Object> row : tasks) {
             Map<String, Object> event = new LinkedHashMap<>();
             event.put("type", "care_task");
             event.put("task_id", row.get("task_id"));
+            if (includeTaskDates) {
+                event.put("event_date", row.get("event_date"));
+                event.put("start_time", clock(row.get("start_time")));
+                event.put("end_time", clock(row.get("end_time")));
+                event.put("box_code", row.get("box_code"));
+            }
             event.put("horse", horseRef(row));
             event.put("task_type", row.get("task_type"));
             event.put("status", row.get("status"));
             events.add(event);
         }
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("date", date);
-        response.put("events", events);
-        return response;
+        return events;
     }
 
     public Map<String, Object> horse(String email, UUID horseId) {

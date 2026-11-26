@@ -134,6 +134,23 @@ class GroomControllerTests {
     }
 
     @Test
+    void calendarRangeReturnsMultiDayTrainingAndCareTasksForWeek() throws Exception {
+        LocalDate tomorrow = TODAY.plusDays(1);
+        createTrainingAssignment(assignedHorse, groomId, TODAY, "07:00", "08:30", "Morning gallop");
+        createTrainingAssignment(assignedHorse, groomId, tomorrow, "08:45", "10:15", "Next day trot");
+        createTask(assignedHorse, groomId, "Cleaning", tomorrow);
+        mvc.perform(get("/api/groom/calendar?from=" + TODAY + "&to=" + TODAY.plusDays(6)).with(groom()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.from").value(TODAY.toString()))
+                .andExpect(jsonPath("$.to").value(TODAY.plusDays(6).toString()))
+                .andExpect(jsonPath("$.events.length()").value(3))
+                .andExpect(jsonPath("$.events[0].event_date").value(TODAY.toString()))
+                .andExpect(jsonPath("$.events[1].event_date").value(tomorrow.toString()))
+                .andExpect(jsonPath("$.events[2].type").value("care_task"))
+                .andExpect(jsonPath("$.events[2].event_date").value(tomorrow.toString()));
+    }
+
+    @Test
     void taskCompletionRejectsAnotherGroomAndIsIdempotentForItsOwner() throws Exception {
         String ownTask = createTask(assignedHorse, groomId, "Feeding", TODAY);
         String otherTask = createTask(otherHorse, otherGroomId, "Cleaning", TODAY);

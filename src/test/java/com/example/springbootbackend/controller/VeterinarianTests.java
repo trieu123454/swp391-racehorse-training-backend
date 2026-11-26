@@ -639,7 +639,14 @@ class VeterinarianTests {
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.training_locked").value(true))
         .andExpect(jsonPath("$.suggest_lock").value(false))
-        .andExpect(jsonPath("$.marked_by").value(uid(VET)));
+        .andExpect(jsonPath("$.marked_by").value(uid(VET)))
+        .andExpect(jsonPath("$.marked_at").value(NOW.toString()));
+    assertThat(
+            db.queryForObject(
+                "SELECT marked_at FROM injury_markers WHERE horse_id=?",
+                LocalDateTime.class,
+                horse))
+        .isEqualTo(LocalDateTime.ofInstant(NOW, VetTime.BUSINESS_ZONE));
     when(time.utcNow()).thenReturn(LocalDateTime.ofInstant(NOW.plusSeconds(1), ZoneOffset.UTC));
     input.put("recovery_status", "Recovered");
     input.put("severity", "Mild");

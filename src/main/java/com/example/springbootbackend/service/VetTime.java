@@ -28,4 +28,10 @@ public class VetTime {
     public LocalDateTime utcStartOf(LocalDate businessDate) {
         return LocalDateTime.ofInstant(businessDate.atStartOfDay(BUSINESS_ZONE).toInstant(), ZoneOffset.UTC);
     }
+
+    public static LocalDateTime toBusinessLocal(LocalDateTime utcDateTime) {
+        return utcDateTime == null
+            ? null
+            : utcDateTime.atOffset(ZoneOffset.UTC).atZoneSameInstant(BUSINESS_ZONE).toLocalDateTime();
+    }
 }

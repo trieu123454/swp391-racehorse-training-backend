@@ -50,7 +50,14 @@ public class GroomController {
     }
 
     @GetMapping("/calendar")
-    public Map<String, Object> calendar(Principal user, @RequestParam(name = "date", required = false) LocalDate date) {
+    public Map<String, Object> calendar(
+            Principal user,
+            @RequestParam(name = "date", required = false) LocalDate date,
+            @RequestParam(name = "from", required = false) LocalDate from,
+            @RequestParam(name = "to", required = false) LocalDate to) {
+        if (from != null || to != null) {
+            return horses.calendarRange(user.getName(), from, to);
+        }
         return horses.calendar(user.getName(), date);
     }
 

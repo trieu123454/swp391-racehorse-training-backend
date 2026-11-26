@@ -304,7 +304,7 @@ public class MedicalService {
     data.sameHorse("medical_records", fields.get("medical_record_id"), horse);
     fields.put("horse_id", horse);
     fields.put("marked_by", actor);
-    fields.put("marked_at", time.utcNow());
+    fields.put("marked_at", VetTime.toBusinessLocal(time.utcNow()));
     String id = data.insert("injury_markers", fields);
     audit.record(actor, ip, "CREATE_INJURY_MARKER:" + id);
     var result = data.row("injury_markers", id, false);
@@ -369,7 +369,7 @@ public class MedicalService {
     data.sameHorse("medical_records", fields.get("medical_record_id"), horse);
     fields.put("horse_id", horse);
     fields.put("marked_by", actor);
-    fields.put("marked_at", time.utcNow());
+    fields.put("marked_at", VetTime.toBusinessLocal(time.utcNow()));
     String id = data.insert("injury_markers", fields);
     audit.record(actor, ip, "APPEND_INJURY_HISTORY:" + sourceId + ":" + id);
     var result = data.row("injury_markers", id, false);

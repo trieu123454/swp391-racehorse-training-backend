@@ -32,9 +32,13 @@ public final class VetRows {
         ResultSetMetaData metadata = rs.getMetaData();
         for (int column = 1; column <= metadata.getColumnCount(); column++) {
             Object value = rs.getObject(column);
-            if (value != null && metadata.getColumnType(column) == Types.TIMESTAMP)
-                value = rs.getObject(column, LocalDateTime.class).toInstant(ZoneOffset.UTC);
-            else if (value != null && metadata.getColumnType(column) == Types.CHAR)
+            if (value != null && metadata.getColumnType(column) == Types.TIMESTAMP) {
+                LocalDateTime local = rs.getObject(column, LocalDateTime.class);
+                // shortcut: injury_markers.marked_at stores Asia/Ho_Chi_Minh wall time while other TIMESTAMP columns store UTC; upgrade if schema migrates to TIMESTAMPTZ
+                value = "marked_at".equalsIgnoreCase(metadata.getColumnLabel(column))
+                    ? local.atZone(VetTime.BUSINESS_ZONE).toInstant()
+                    : local.toInstant(ZoneOffset.UTC);
+            } else if (value != null && metadata.getColumnType(column) == Types.CHAR)
                 value = value.toString().stripTrailing();
             else if (value != null && metadata.getColumnType(column) == Types.DATE)
                 value = rs.getObject(column, LocalDate.class);
