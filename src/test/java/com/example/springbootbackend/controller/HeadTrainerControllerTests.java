@@ -913,6 +913,96 @@ class HeadTrainerControllerTests {
     return Objects.requireNonNull(db.queryForObject("SELECT count(*) FROM " + table, Long.class));
   }
 
+  @Test
+  void rescheduleRejectsPastTimeTodayOutsidePlanDatesAndGroomConflicts() throws Exception {
+    // NOW = 2026-09-28T04:00:00Z = 11:00 Asia/Ho_Chi_Minh on 2026-09-28
+    String planId = createPlan(horse, "Reschedule Rules");
+    String scheduleId = createSchedule(horse, planId, "2026-09-29", "14:15", "15:45");
+    long groom1 = uid("groom@test.com");
+    long groom2 = uid("groom2@test.com");
+
+    // 1. Rescheduling to a past slot on today (08:45 < 11:00) must fail with 400
+    call(body(
+            patch("/api/training-schedules/" + scheduleId),
+            Map.of(
+                "event_date", "2026-09-28",
+                "start_time", "08:45",
+                "end_time", "10:15")))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+        .andExpect(jsonPath("$.error.details[0].field").value("start_time"));
+
+    // 2. Rescheduling outside the plan's [2026-09-28 .. 2026-10-31] window must fail with 400
+    call(body(
+            patch("/api/training-schedules/" + scheduleId),
+            Map.of(
+                "event_date", "2026-11-02",
+                "start_time", "07:00",
+                "end_time", "08:30")))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+        .andExpect(jsonPath("$.error.details[0].field").value("event_date"));
+
+    // 3. Occupy groom1 (and later groom2) on 2026-10-01 14:15-15:45 for otherHorse
+    String otherPlan = createPlan(otherHorse, "Other");
+    Map<String, Object> busyGroom1 = schedule(otherPlan, "2026-10-01", "14:15", "15:45");
+    busyGroom1.put("assigned_groom_id", groom1);
+    call(body(post("/api/horses/" + otherHorse + "/training-schedules"), busyGroom1))
+        .andExpect(status().isCreated());
+
+    // Explicitly picking busy groom1 must return 409 SCHEDULE_CONFLICT (never silently swap)
+    call(body(
+            patch("/api/training-schedules/" + scheduleId),
+            Map.of(
+                "event_date", "2026-10-01",
+                "start_time", "14:15",
+                "end_time", "15:45",
+                "assigned_groom_id", groom1)))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SCHEDULE_CONFLICT"));
+
+    // Occupy groom2 on the same slot as well -> NO grooms are free
+    String thirdHorse = UUID.randomUUID().toString();
+    db.update("INSERT INTO horses(id,horse_name,readiness_status) VALUES (?, 'Bolt','Ready')", thirdHorse);
+    String thirdPlan = createPlan(thirdHorse, "Third");
+    Map<String, Object> busyGroom2 = schedule(thirdPlan, "2026-10-01", "14:15", "15:45");
+    busyGroom2.put("assigned_groom_id", groom2);
+    call(body(post("/api/horses/" + thirdHorse + "/training-schedules"), busyGroom2))
+        .andExpect(status().isCreated());
+
+    // Rescheduling without assigned_groom_id when ALL grooms are busy must return 409 (never save double-booked groom)
+    call(body(
+            patch("/api/training-schedules/" + scheduleId),
+            Map.of(
+                "event_date", "2026-10-01",
+                "start_time", "14:15",
+                "end_time", "15:45")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SCHEDULE_CONFLICT"));
+
+    // 4. Rescheduling to a valid slot with a free groom (or null to unassign) succeeds
+    call(body(
+            patch("/api/training-schedules/" + scheduleId),
+            Map.of(
+                "event_date", "2026-10-02",
+                "start_time", "16:15",
+                "end_time", "17:45",
+                "assigned_groom_id", groom2)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.event_date").value("2026-10-02"))
+        .andExpect(jsonPath("$.assigned_groom_id").value(groom2))
+        .andExpect(jsonPath("$.status").value("Scheduled"));
+
+    Map<String, Object> clearGroomBody = new LinkedHashMap<>();
+    clearGroomBody.put("event_date", "2026-10-02");
+    clearGroomBody.put("start_time", "16:15");
+    clearGroomBody.put("end_time", "17:45");
+    clearGroomBody.put("assigned_groom_id", null);
+    call(body(patch("/api/training-schedules/" + scheduleId), clearGroomBody))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.assigned_groom_id").isEmpty());
+  }
+
   private String createPlan(String horseId, String stage) throws Exception {
     return result(
             call(body(post("/api/horses/" + horseId + "/training-plans"), plan(stage)))

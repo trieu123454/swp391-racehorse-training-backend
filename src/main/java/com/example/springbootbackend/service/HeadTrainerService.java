@@ -802,7 +802,9 @@ public class HeadTrainerService {
             + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ts.id"
             + " AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,ts.trainer_review,h.id"
             + " AS horse_id,h.horse_name,h.image_url,sb.box_code,sb.section,ts.training_plan_id,ts.assigned_groom_id,ts.snapshot_stage_name"
-            + " AS plan_stage_name,ts.snapshot_objective AS"
+            + " AS plan_stage_name,COALESCE(p.start_date,ts.snapshot_start_date) AS"
+            + " plan_start_date,COALESCE(p.end_date,ts.snapshot_end_date) AS"
+            + " plan_end_date,ts.snapshot_objective AS"
             + " plan_objective,ts.target_distance_meters AS"
             + " plan_target_distance_meters,ts.snapshot_workload_minutes AS"
             + " plan_target_workload_minutes,ts.snapshot_track_surface AS"
@@ -1384,17 +1386,43 @@ public class HeadTrainerService {
       LocalTime newEnd = fields.get("end_time") != null
           ? (LocalTime) fields.get("end_time")
           : (LocalTime) event.get("end_time");
+      if (newStart == null || newEnd == null)
+        throw VetException.invalid("start_time", "Phai co gio bat dau va gio ket thuc");
       if (newDate.isBefore(time.today()))
         throw VetException.invalid("event_date", "Ngay tap moi khong duoc o qua khu");
-      if (newStart != null && newEnd != null && !newEnd.isAfter(newStart))
+      LocalDateTime now = LocalDateTime.ofInstant(time.now(), VetTime.BUSINESS_ZONE);
+      if (newDate.equals(now.toLocalDate()) && !LocalDateTime.of(newDate, newStart).isAfter(now))
+        throw VetException.invalid("start_time", "Gio bat dau moi phai o phia truoc trong ngay");
+      if (!newEnd.isAfter(newStart))
         throw VetException.invalid("end_time", "Phai sau start_time");
+      if (!"Rest".equals(session.get("session_type"))) {
+        Object targetPlanId = fields.containsKey("training_plan_id")
+            ? fields.get("training_plan_id")
+            : session.get("training_plan_id");
+        if (targetPlanId != null) {
+          var planRows = db.query(
+              "SELECT start_date,end_date FROM training_plans WHERE id=?",
+              VetRows.MAPPER,
+              targetPlanId.toString());
+          LocalDate planStart = planRows.isEmpty()
+              ? (LocalDate) session.get("snapshot_start_date")
+              : (LocalDate) planRows.getFirst().get("start_date");
+          LocalDate planEnd = planRows.isEmpty()
+              ? (LocalDate) session.get("snapshot_end_date")
+              : (LocalDate) planRows.getFirst().get("end_date");
+          if ((planStart != null && newDate.isBefore(planStart))
+              || (planEnd != null && newDate.isAfter(planEnd)))
+            throw VetException.invalid("event_date", "Ngày tập phải nằm trong thời gian của giáo án");
+        }
+      }
       String horseIdStr = session.get("horse_id").toString();
       String eventIdStr = event.get("id").toString();
       var horseConflicts = conflicts.checkCalendarConflicts(
           horseIdStr, newDate, newStart, newEnd, eventIdStr, null, null);
       if (!horseConflicts.isEmpty())
         throw scheduleConflict(horseConflicts);
-      Long groomId = fields.containsKey("assigned_groom_id")
+      boolean explicitGroom = fields.containsKey("assigned_groom_id");
+      Long groomId = explicitGroom
           ? (fields.get("assigned_groom_id") == null
               ? null
               : ((Number) fields.get("assigned_groom_id")).longValue())
@@ -1404,7 +1432,10 @@ public class HeadTrainerService {
         var groomConflicts = conflicts.checkCalendarConflicts(
             horseIdStr, newDate, newStart, newEnd, eventIdStr, groomId, "GROOM");
         if (!groomConflicts.isEmpty()) {
-          // Nếu Groom hiện tại bận ca này với ngựa khác, thử tìm Groom rảnh trong ca mới
+          if (explicitGroom)
+            throw scheduleConflict(groomConflicts);
+          // Nếu không chỉ định Groom mới mà Groom cũ bận ca này, thử tìm Groom rảnh; nếu tất cả bận thì báo xung đột
+          Long replacement = null;
           var allGrooms = db.query(
               "SELECT u.user_id FROM users u JOIN roles r ON r.role_id=u.role_id WHERE"
                   + " r.role_name='GROOM' AND u.status='APPROVED' AND"
@@ -1416,10 +1447,13 @@ public class HeadTrainerService {
                 .checkCalendarConflicts(
                     horseIdStr, newDate, newStart, newEnd, eventIdStr, candidateId, "GROOM")
                 .isEmpty()) {
-              groomId = candidateId;
+              replacement = candidateId;
               break;
             }
           }
+          if (replacement == null)
+            throw scheduleConflict(groomConflicts);
+          groomId = replacement;
         }
       }
       db.update(
