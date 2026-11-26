@@ -23,6 +23,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -793,58 +796,10 @@ public class HeadTrainerService {
         + " horses h ON h.id=ts.horse_id LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id"
         + " LEFT JOIN users groom ON groom.user_id=ts.assigned_groom_id LEFT JOIN"
         + " training_plans p ON p.id=ts.training_plan_id";
-    Long total = db.queryForObject("SELECT count(*)" + fromSql + where, Long.class, args.toArray());
     List<Object> queryArgs = new ArrayList<>(args);
     queryArgs.add(page.limit());
     queryArgs.add(page.offset());
-    var events = db.query(
-        "SELECT ce.id AS"
-            + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ts.id"
-            + " AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,ts.trainer_review,h.id"
-            + " AS horse_id,h.horse_name,h.image_url,sb.box_code,sb.section,ts.training_plan_id,ts.assigned_groom_id,ts.snapshot_stage_name"
-            + " AS plan_stage_name,COALESCE(p.start_date,ts.snapshot_start_date) AS"
-            + " plan_start_date,COALESCE(p.end_date,ts.snapshot_end_date) AS"
-            + " plan_end_date,ts.snapshot_objective AS"
-            + " plan_objective,ts.target_distance_meters AS"
-            + " plan_target_distance_meters,ts.snapshot_workload_minutes AS"
-            + " plan_target_workload_minutes,ts.snapshot_track_surface AS"
-            + " plan_target_track_surface,ts.target_intensity AS"
-            + " plan_target_intensity,groom.full_name AS groom_name"
-            + fromSql
-            + where
-            + " ORDER BY ce.event_date,ce.start_time,h.horse_name LIMIT ? OFFSET ?",
-        VetRows.MAPPER,
-        queryArgs.toArray());
-    if (!events.isEmpty()) {
-      List<String> scheduleIds = events.stream()
-          .map(row -> Objects.toString(row.get("training_schedule_id"), ""))
-          .filter(s -> !s.isBlank())
-          .distinct()
-          .toList();
-      if (!scheduleIds.isEmpty()) {
-        String placeholders = String.join(",", Collections.nCopies(scheduleIds.size(), "?"));
-        var metricRows = db.query(
-            "SELECT id,horse_id,training_schedule_id,recorded_by,body_weight_kg,max_heart_rate,"
-                + "avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,bp_diastolic,is_simulated,recorded_at"
-                + " FROM shared_training_metrics WHERE training_schedule_id IN ("
-                + placeholders
-                + ")"
-                + " ORDER BY recorded_at DESC,id DESC",
-            VetRows.MAPPER,
-            scheduleIds.toArray());
-        Map<String, List<Map<String, Object>>> metricsBySchedule = new LinkedHashMap<>();
-        for (var m : metricRows) {
-          String sid = Objects.toString(m.get("training_schedule_id"), "");
-          metricsBySchedule.computeIfAbsent(sid, k -> new ArrayList<>()).add(m);
-        }
-        for (var ev : events) {
-          String sid = Objects.toString(ev.get("training_schedule_id"), "");
-          List<Map<String, Object>> mList = metricsBySchedule.getOrDefault(sid, List.of());
-          ev.put("metrics", mList);
-          ev.put("latest_metric", mList.isEmpty() ? null : mList.getFirst());
-        }
-      }
-    }
+
     String careWhere = " WHERE ce.event_type NOT IN ('Training','TrialRun','Rest','CareTask') AND"
         + " ce.status<>'Cancelled' AND h.deleted_at IS NULL";
     List<Object> careArgs = new ArrayList<>();
@@ -860,43 +815,122 @@ public class HeadTrainerService {
       careWhere += " AND ce.horse_id=?";
       careArgs.add(horseId.toString());
     }
-    var careEvents = new ArrayList<>(
-        db.query(
-            "SELECT ce.id AS"
-                + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ce.source_table,ce.source_id,h.id"
-                + " AS horse_id,h.horse_name,sb.box_code,sb.section,pcs.care_type,pcs.assigned_doctor_id,doc.full_name"
-                + " AS doctor_name,dtl.task_type,dtl.groom_id,g.full_name AS groom_name FROM"
-                + " calendar_events ce JOIN horses h ON h.id=ce.horse_id LEFT JOIN stable_boxes"
-                + " sb ON sb.id=h.stable_box_id LEFT JOIN periodic_care_schedules pcs ON"
-                + " (pcs.id=ce.source_id OR pcs.calendar_event_id=ce.id) LEFT JOIN users doc ON"
-                + " doc.user_id=pcs.assigned_doctor_id LEFT JOIN daily_task_logs dtl ON"
-                + " dtl.id=ce.source_id AND ce.source_table='daily_task_logs' LEFT JOIN users g"
-                + " ON g.user_id=dtl.groom_id"
-                + careWhere
-                + " ORDER BY ce.event_date,ce.start_time NULLS LAST,h.horse_name",
-            VetRows.MAPPER,
-            careArgs.toArray()));
-    // Include unbooked or overdue periodic_care_schedules rules so Head Trainer
-    // calendar stays 100%
-    // in sync with Veterinarian calendar
+    final String finalCareWhere = careWhere;
+
     String ruleWhere = " WHERE h.deleted_at IS NULL";
     List<Object> ruleArgs = new ArrayList<>();
     if (horseId != null) {
       ruleWhere += " AND p.horse_id=?";
       ruleArgs.add(horseId.toString());
     }
-    var ruleRows = db.query(
-        "SELECT"
-            + " p.id,p.horse_id,p.care_type,p.frequency_days,p.next_due_date,p.assigned_doctor_id,p.calendar_event_id,ce.status"
-            + " AS event_status,h.horse_name,sb.box_code,sb.section,doc.full_name AS"
-            + " doctor_name FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id"
-            + " LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id LEFT JOIN calendar_events ce"
-            + " ON ce.id=p.calendar_event_id LEFT JOIN users doc ON"
-            + " doc.user_id=p.assigned_doctor_id"
-            + ruleWhere
-            + " ORDER BY p.next_due_date,p.id",
-        VetRows.MAPPER,
-        ruleArgs.toArray());
+    final String finalRuleWhere = ruleWhere;
+    final String finalWhere = where;
+
+    record EventsBatch(List<Map<String, Object>> events, Long total) {}
+    EventsBatch batch;
+    List<Map<String, Object>> careEvents;
+    List<Map<String, Object>> ruleRows;
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      CompletableFuture<EventsBatch> eventsFuture = CompletableFuture.supplyAsync(() -> {
+        var rows = db.query(
+            "SELECT ce.id AS"
+                + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ts.id"
+                + " AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,ts.trainer_review,h.id"
+                + " AS horse_id,h.horse_name,h.image_url,sb.box_code,sb.section,ts.training_plan_id,ts.assigned_groom_id,ts.snapshot_stage_name"
+                + " AS plan_stage_name,COALESCE(p.start_date,ts.snapshot_start_date) AS"
+                + " plan_start_date,COALESCE(p.end_date,ts.snapshot_end_date) AS"
+                + " plan_end_date,ts.snapshot_objective AS"
+                + " plan_objective,ts.target_distance_meters AS"
+                + " plan_target_distance_meters,ts.snapshot_workload_minutes AS"
+                + " plan_target_workload_minutes,ts.snapshot_track_surface AS"
+                + " plan_target_track_surface,ts.target_intensity AS"
+                + " plan_target_intensity,groom.full_name AS groom_name"
+                + fromSql
+                + finalWhere
+                + " ORDER BY ce.event_date,ce.start_time,h.horse_name LIMIT ? OFFSET ?",
+            VetRows.MAPPER,
+            queryArgs.toArray());
+        Long rowTotal = (page.offset() == 0 && rows.size() < page.limit())
+            ? Long.valueOf(rows.size())
+            : db.queryForObject("SELECT count(*)" + fromSql + finalWhere, Long.class, args.toArray());
+        if (!rows.isEmpty()) {
+          List<String> scheduleIds = rows.stream()
+              .map(row -> Objects.toString(row.get("training_schedule_id"), ""))
+              .filter(s -> !s.isBlank())
+              .distinct()
+              .toList();
+          if (!scheduleIds.isEmpty()) {
+            String placeholders = String.join(",", Collections.nCopies(scheduleIds.size(), "?"));
+            var metricRows = db.query(
+                "SELECT id,horse_id,training_schedule_id,recorded_by,body_weight_kg,max_heart_rate,"
+                    + "avg_speed_kmh,stamina_score,has_injury_alert,trainer_review,bp_systolic,bp_diastolic,is_simulated,recorded_at"
+                    + " FROM shared_training_metrics WHERE training_schedule_id IN ("
+                    + placeholders
+                    + ")"
+                    + " ORDER BY recorded_at DESC,id DESC",
+                VetRows.MAPPER,
+                scheduleIds.toArray());
+            Map<String, List<Map<String, Object>>> metricsBySchedule = new LinkedHashMap<>();
+            for (var m : metricRows) {
+              String sid = Objects.toString(m.get("training_schedule_id"), "");
+              metricsBySchedule.computeIfAbsent(sid, k -> new ArrayList<>()).add(m);
+            }
+            for (var ev : rows) {
+              String sid = Objects.toString(ev.get("training_schedule_id"), "");
+              List<Map<String, Object>> mList = metricsBySchedule.getOrDefault(sid, List.of());
+              ev.put("metrics", mList);
+              ev.put("latest_metric", mList.isEmpty() ? null : mList.getFirst());
+            }
+          }
+        }
+        return new EventsBatch(rows, rowTotal);
+      }, executor);
+
+      CompletableFuture<List<Map<String, Object>>> careFuture = CompletableFuture.supplyAsync(() ->
+          new ArrayList<>(
+              db.query(
+                  "SELECT ce.id AS"
+                      + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ce.source_table,ce.source_id,h.id"
+                      + " AS horse_id,h.horse_name,sb.box_code,sb.section,pcs.care_type,pcs.assigned_doctor_id,doc.full_name"
+                      + " AS doctor_name,dtl.task_type,dtl.groom_id,g.full_name AS groom_name FROM"
+                      + " calendar_events ce JOIN horses h ON h.id=ce.horse_id LEFT JOIN stable_boxes"
+                      + " sb ON sb.id=h.stable_box_id LEFT JOIN periodic_care_schedules pcs ON"
+                      + " (pcs.id=ce.source_id OR pcs.calendar_event_id=ce.id) LEFT JOIN users doc ON"
+                      + " doc.user_id=pcs.assigned_doctor_id LEFT JOIN daily_task_logs dtl ON"
+                      + " dtl.id=ce.source_id AND ce.source_table='daily_task_logs' LEFT JOIN users g"
+                      + " ON g.user_id=dtl.groom_id"
+                      + finalCareWhere
+                      + " ORDER BY ce.event_date,ce.start_time NULLS LAST,h.horse_name",
+                  VetRows.MAPPER,
+                  careArgs.toArray())),
+          executor);
+
+      CompletableFuture<List<Map<String, Object>>> ruleFuture = CompletableFuture.supplyAsync(() ->
+          db.query(
+              "SELECT"
+                  + " p.id,p.horse_id,p.care_type,p.frequency_days,p.next_due_date,p.assigned_doctor_id,p.calendar_event_id,ce.status"
+                  + " AS event_status,h.horse_name,sb.box_code,sb.section,doc.full_name AS"
+                  + " doctor_name FROM periodic_care_schedules p JOIN horses h ON h.id=p.horse_id"
+                  + " LEFT JOIN stable_boxes sb ON sb.id=h.stable_box_id LEFT JOIN calendar_events ce"
+                  + " ON ce.id=p.calendar_event_id LEFT JOIN users doc ON"
+                  + " doc.user_id=p.assigned_doctor_id"
+                  + finalRuleWhere
+                  + " ORDER BY p.next_due_date,p.id",
+              VetRows.MAPPER,
+              ruleArgs.toArray()),
+          executor);
+
+      try {
+        batch = eventsFuture.join();
+        careEvents = careFuture.join();
+        ruleRows = ruleFuture.join();
+      } catch (CompletionException ex) {
+        if (ex.getCause() instanceof RuntimeException runtime) throw runtime;
+        throw new IllegalStateException("Cannot load head trainer calendar", ex.getCause());
+      }
+    }
+    var events = batch.events();
+    Long total = batch.total();
     LocalDate todayDate = time.today();
     boolean currentWeekViewed = from != null && to != null && !todayDate.isBefore(from) && !todayDate.isAfter(to);
     for (var rule : ruleRows) {

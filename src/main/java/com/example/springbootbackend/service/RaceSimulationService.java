@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -166,7 +167,50 @@ public class RaceSimulationService {
         RaceSimulationFormula.durationForDistance(distance, availableSeconds, seed, capacity);
     double maxSpeed = RaceSimulationFormula.baseSpeed(distance, duration, seed, capacity);
     maxSpeed = BigDecimal.valueOf(maxSpeed).setScale(4, RoundingMode.HALF_UP).doubleValue();
+    BigDecimal baseMaxSpeed = BigDecimal.valueOf(maxSpeed).setScale(4, RoundingMode.HALF_UP);
+    BigDecimal baselineStamina = BigDecimal.valueOf(stamina).setScale(2, RoundingMode.HALF_UP);
+    Object weight = horses.getFirst().get("current_weight_kg");
+    BigDecimal bodyWeightKg = weight != null ? new BigDecimal(weight.toString()) : null;
     String simulationId = UUID.randomUUID().toString();
+    String scenario = fields.get("scenario").toString();
+    Instant nowInstant = time.now();
+    int cadence = RaceSimulationFormula.cadence(duration);
+
+    Map<String, Object> sessionMap = new LinkedHashMap<>();
+    sessionMap.put("id", simulationId);
+    sessionMap.put("distance_meters", distance);
+    sessionMap.put("duration_seconds", duration);
+    sessionMap.put("training_schedule_id", scheduleId);
+    sessionMap.put("race_id", null);
+    sessionMap.put("target_intensity", intensity);
+    sessionMap.put("track_surface", surface);
+    sessionMap.put("actual_distance_meters", null);
+    sessionMap.put("model_version", 5);
+    sessionMap.put("stop_reason", null);
+    sessionMap.put("recovery_heart_rate", null);
+    sessionMap.put("stamina_score", null);
+    sessionMap.put("scenario", scenario);
+    sessionMap.put("status", "Running");
+    sessionMap.put("created_by", actor);
+    sessionMap.put("created_at", nowInstant);
+    sessionMap.put("stopped_at", null);
+
+    Map<String, Object> horseMap = new LinkedHashMap<>();
+    horseMap.put("simulation_id", simulationId);
+    horseMap.put("horse_id", horseId);
+    horseMap.put("lane", 1);
+    horseMap.put("seed", seed);
+    horseMap.put("base_max_speed_kmh", baseMaxSpeed);
+    horseMap.put("base_resting_heart_rate", 34);
+    horseMap.put("base_bp_systolic", 110);
+    horseMap.put("base_bp_diastolic", 70);
+    horseMap.put("baseline_stamina_score", baselineStamina);
+    horseMap.put("body_weight_kg", bodyWeightKg);
+    horseMap.put("horse_name", horses.getFirst().get("horse_name"));
+    horseMap.put("image_url", horses.getFirst().get("image_url"));
+    horseMap.put("base_resting_bp", Map.of("systolic", 110, "diastolic", 70));
+
+    var initialReadings = recorder.buildInitialReadings(sessionMap, horseMap);
     RaceSimulation simulation = new RaceSimulation();
     simulation.setId(simulationId);
     simulation.setDistanceMeters(distance);
@@ -174,11 +218,12 @@ public class RaceSimulationService {
     simulation.setTrainingScheduleId(scheduleId);
     simulation.setStatus("Running");
     simulation.setCreatedBy(actor);
-    simulation.setCreatedAt(time.utcNow());
+    simulation.setCreatedAt(LocalDateTime.ofInstant(nowInstant, ZoneOffset.UTC));
     simulation.setTargetIntensity(intensity);
     simulation.setTrackSurface(surface);
     simulation.setModelVersion(5);
-    simulation.setScenario(fields.get("scenario").toString());
+    simulation.setScenario(scenario);
+    simulation.setReadingsJson(recorder.serializeReadings(initialReadings));
     raceSimulationRepository.saveAndFlush(simulation);
     if (scheduleId != null) {
       db.update("UPDATE training_schedules SET status='InProgress' WHERE id=?", scheduleId);
@@ -191,16 +236,28 @@ public class RaceSimulationService {
     simHorse.setId(new RaceSimulationHorseId(simulationId, horseId));
     simHorse.setLane(1);
     simHorse.setSeed(seed);
-    simHorse.setBaseMaxSpeedKmh(BigDecimal.valueOf(maxSpeed).setScale(4, RoundingMode.HALF_UP));
+    simHorse.setBaseMaxSpeedKmh(baseMaxSpeed);
     simHorse.setBaseRestingHeartRate(34);
     simHorse.setBaseBpSystolic(110);
     simHorse.setBaseBpDiastolic(70);
-    simHorse.setBaselineStaminaScore(BigDecimal.valueOf(stamina).setScale(2, RoundingMode.HALF_UP));
-    Object weight = horses.getFirst().get("current_weight_kg");
-    simHorse.setBodyWeightKg(weight != null ? new BigDecimal(weight.toString()) : null);
+    simHorse.setBaselineStaminaScore(baselineStamina);
+    simHorse.setBodyWeightKg(bodyWeightKg);
     raceSimulationHorseRepository.saveAndFlush(simHorse);
+    recorder.notifyAlertIfNeeded(simulationId, horseId, horseMap, initialReadings, cadence);
     audit.record(actor, ip, "CREATE_RACE_SIMULATION:" + simulationId);
-    return detail(email, UUID.fromString(simulationId));
+
+    Map<String, Object> result = new LinkedHashMap<>(sessionMap);
+    result.put("simulation_id", simulationId);
+    result.put("horses", List.of(horseMap));
+    result.put("alert_thresholds", alertPolicy.thresholds());
+    result.put("elapsed_seconds", 0);
+    result.put("sampling_interval_seconds", cadence);
+    result.put("server_time", nowInstant);
+    result.put("phase", "Warmup");
+    result.put("readings", initialReadings);
+    result.put("alerts", alertPolicy.evaluate(horseMap, initialReadings, null, cadence));
+    result.put("results", List.of());
+    return result;
   }
 
   @Transactional

@@ -89,6 +89,21 @@ public class TrainingSimulationRecorder {
                 Duration.between((Instant) session.get("created_at"), end).getSeconds()));
   }
 
+  List<Map<String, Object>> buildInitialReadings(
+      Map<String, Object> session, Map<String, Object> horse) {
+    return List.of(buildReading(session, horse, null, 0));
+  }
+
+  void notifyAlertIfNeeded(
+      String simulationId,
+      String horseId,
+      Map<String, Object> horse,
+      List<Map<String, Object>> readings,
+      int cadence) {
+    if (!alertPolicy.evaluate(horse, readings, null, cadence).isEmpty())
+      notifyOnce(simulationId, horseId);
+  }
+
   public List<Map<String, Object>> capture(
       Map<String, Object> session, int elapsed, boolean terminal) {
     String id = session.get("id").toString();
@@ -186,7 +201,7 @@ public class TrainingSimulationRecorder {
     }
   }
 
-  private String serializeReadings(List<Map<String, Object>> readings) {
+  String serializeReadings(List<Map<String, Object>> readings) {
     try {
       return objectMapper.writeValueAsString(readings);
     } catch (Exception e) {
