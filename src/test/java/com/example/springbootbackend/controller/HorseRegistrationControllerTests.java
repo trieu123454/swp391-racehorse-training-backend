@@ -207,7 +207,8 @@ class HorseRegistrationControllerTests {
                         .content(json.writeValueAsBytes(profileEdit)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.pedigree_father").value("Updated Sire"))
-                .andExpect(jsonPath("$.pedigree_mother").value("Updated Dam"));
+                .andExpect(jsonPath("$.pedigree_mother").value("Updated Dam"))
+                .andExpect(jsonPath("$.registration_documents.length()").value(2));
         profileEdit.put("ownerId", ownerId(otherOwnerEmail));
         mvc.perform(put("/api/horses/{id}", horseId)
                         .with(user(managerEmail).roles("CLUB_MANAGER"))

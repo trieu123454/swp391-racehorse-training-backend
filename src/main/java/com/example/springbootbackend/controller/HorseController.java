@@ -85,42 +85,48 @@ public class HorseController {
     HorseService.Actor actor = horses.actor(p.getName(), false);
     Map<String, Object> horse = horses.detail(actor, id);
     attachSignedImageUrl(horse);
-    if (Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
-      List<Map<String, Object>> rawDocs =
-          horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id);
-      List<Map<String, Object>> documents =
-          rawDocs.parallelStream()
-              .map(
-                  document -> {
-                    Map<String, Object> item = new LinkedHashMap<>(document);
-                    String path = Objects.toString(item.remove("object_path"), null);
-                    String url = null;
-                    String downloadUrl = null;
-                    Object expiresIn = null;
-                    if (path != null && !path.isBlank()) {
-                      try {
-                        Map<String, Object> signed = storage.signedUrl(path);
-                        Map<String, Object> download =
-                            storage.signedUrl(
-                                path, Objects.toString(item.get("name"), "giay-to.pdf"));
-                        url = signed.get("url") instanceof String s && !s.isBlank() ? s : null;
-                        downloadUrl =
-                            download.get("url") instanceof String s && !s.isBlank() ? s : null;
-                        expiresIn = signed.get("expiresIn");
-                      } catch (RuntimeException ignored) {
-                        // Keep non-blocking if storage signing fails for a legacy or broken
-                        // document path
-                      }
-                    }
-                    item.put("url", url);
-                    item.put("download_url", downloadUrl);
-                    item.put("expires_in", expiresIn);
-                    return item;
-                  })
-              .toList();
-      horse.put("registration_documents", documents);
-    }
+    attachRegistrationDocuments(actor, id, horse);
     return horse;
+  }
+
+  private void attachRegistrationDocuments(
+      HorseService.Actor actor, UUID id, Map<String, Object> horse) {
+    if (!Set.of("CLUB_MANAGER", "HORSE_OWNER").contains(actor.role())) {
+      return;
+    }
+    List<Map<String, Object>> rawDocs =
+        horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id);
+    List<Map<String, Object>> documents =
+        rawDocs.parallelStream()
+            .map(
+                document -> {
+                  Map<String, Object> item = new LinkedHashMap<>(document);
+                  String path = Objects.toString(item.remove("object_path"), null);
+                  String url = null;
+                  String downloadUrl = null;
+                  Object expiresIn = null;
+                  if (path != null && !path.isBlank()) {
+                    try {
+                      Map<String, Object> signed = storage.signedUrl(path);
+                      Map<String, Object> download =
+                          storage.signedUrl(
+                              path, Objects.toString(item.get("name"), "giay-to.pdf"));
+                      url = signed.get("url") instanceof String s && !s.isBlank() ? s : null;
+                      downloadUrl =
+                          download.get("url") instanceof String s && !s.isBlank() ? s : null;
+                      expiresIn = signed.get("expiresIn");
+                    } catch (RuntimeException ignored) {
+                      // Keep non-blocking if storage signing fails for a legacy or broken
+                      // document path
+                    }
+                  }
+                  item.put("url", url);
+                  item.put("download_url", downloadUrl);
+                  item.put("expires_in", expiresIn);
+                  return item;
+                })
+            .toList();
+    horse.put("registration_documents", documents);
   }
 
   @GetMapping("/{id}/ownership-history")
@@ -137,8 +143,10 @@ public class HorseController {
   @PutMapping("/{id}")
   public Map<String, Object> update(
       Principal p, @PathVariable("id") UUID id, @Valid @RequestBody HorseUpdateRequest r) {
-    Map<String, Object> updated = horses.update(horses.actor(p.getName(), true), id, r);
+    HorseService.Actor actor = horses.actor(p.getName(), true);
+    Map<String, Object> updated = horses.update(actor, id, r);
     attachSignedImageUrl(updated);
+    attachRegistrationDocuments(actor, id, updated);
     return updated;
   }
 
