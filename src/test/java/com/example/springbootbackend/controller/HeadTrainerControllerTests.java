@@ -1003,6 +1003,58 @@ class HeadTrainerControllerTests {
         .andExpect(jsonPath("$.assigned_groom_id").isEmpty());
   }
 
+  @Test
+  void simulationLifecycleSyncsCalendarEventStatus() throws Exception {
+    String scheduleId = createSchedule(horse, null, "2026-10-03", "06:00", "07:00");
+    // Production/legacy rows may store capitalized 'Training_Schedules'; PK updates must still sync ce.status.
+    db.update(
+        "UPDATE calendar_events SET source_table='Training_Schedules' WHERE id=(SELECT"
+            + " calendar_event_id FROM training_schedules WHERE id=?)",
+        scheduleId);
+
+    setNow(Instant.parse("2026-10-02T23:00:00Z"), LocalDate.of(2026, 10, 3));
+    JsonNode started = start(scheduleId, horse, "Normal");
+    String simId = started.get("simulation_id").asText();
+    int duration = started.get("duration_seconds").asInt();
+
+    assertThat(
+            db.queryForObject(
+                "SELECT status FROM training_schedules WHERE id=?", String.class, scheduleId))
+        .isEqualTo("InProgress");
+    assertThat(
+            db.queryForObject(
+                "SELECT ce.status FROM calendar_events ce JOIN training_schedules ts ON"
+                    + " ce.id=ts.calendar_event_id WHERE ts.id=?",
+                String.class,
+                scheduleId))
+        .isEqualTo("InProgress");
+    call(get("/api/head-trainer/calendar?from=2026-10-03&to=2026-10-03"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.data[0].training_schedule_id").value(scheduleId))
+        .andExpect(jsonPath("$.data[0].status").value("InProgress"));
+
+    setNow(Instant.parse("2026-10-02T23:00:00Z").plusSeconds(duration), LocalDate.of(2026, 10, 3));
+    call(get("/api/head-trainer/race-simulations/" + simId))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("Completed"));
+
+    assertThat(
+            db.queryForObject(
+                "SELECT status FROM training_schedules WHERE id=?", String.class, scheduleId))
+        .isEqualTo("Completed");
+    assertThat(
+            db.queryForObject(
+                "SELECT ce.status FROM calendar_events ce JOIN training_schedules ts ON"
+                    + " ce.id=ts.calendar_event_id WHERE ts.id=?",
+                String.class,
+                scheduleId))
+        .isEqualTo("Completed");
+    call(get("/api/head-trainer/calendar?from=2026-10-03&to=2026-10-03"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.data[0].training_schedule_id").value(scheduleId))
+        .andExpect(jsonPath("$.data[0].status").value("Completed"));
+  }
+
   private String createPlan(String horseId, String stage) throws Exception {
     return result(
             call(body(post("/api/horses/" + horseId + "/training-plans"), plan(stage)))

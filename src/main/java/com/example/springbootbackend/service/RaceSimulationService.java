@@ -78,7 +78,7 @@ public class RaceSimulationService {
     var scheduleRows =
         db.query(
             "SELECT"
-                + " ts.horse_id,ts.status,ts.session_type,ce.event_date,ce.start_time,ce.end_time,ts.target_distance_meters,ts.target_intensity,ts.track_surface,ts.assigned_groom_id"
+                + " ts.calendar_event_id,ts.horse_id,ts.status,ts.session_type,ce.event_date,ce.start_time,ce.end_time,ts.target_distance_meters,ts.target_intensity,ts.track_surface,ts.assigned_groom_id"
                 + " FROM training_schedules ts JOIN calendar_events ce ON"
                 + " ce.id=ts.calendar_event_id LEFT JOIN training_plans p ON"
                 + " p.id=ts.training_plan_id WHERE ts.id=? FOR UPDATE OF ts",
@@ -228,9 +228,8 @@ public class RaceSimulationService {
     if (scheduleId != null) {
       db.update("UPDATE training_schedules SET status='InProgress' WHERE id=?", scheduleId);
       db.update(
-          "UPDATE calendar_events SET status='InProgress' WHERE source_table='training_schedules'"
-              + " AND source_id=?",
-          scheduleId);
+          "UPDATE calendar_events SET status='InProgress' WHERE id=?",
+          schedule.get("calendar_event_id"));
     }
     RaceSimulationHorse simHorse = new RaceSimulationHorse();
     simHorse.setId(new RaceSimulationHorseId(simulationId, horseId));
@@ -357,8 +356,8 @@ public class RaceSimulationService {
     if ("Running".equals(session.get("status"))) {
       var schedules =
           db.query(
-              "SELECT ts.status,h.is_training_locked,h.current_status FROM training_schedules ts"
-                  + " JOIN horses h ON h.id=ts.horse_id WHERE ts.id=?",
+              "SELECT ts.calendar_event_id,ts.status,h.is_training_locked,h.current_status FROM"
+                  + " training_schedules ts JOIN horses h ON h.id=ts.horse_id WHERE ts.id=?",
               VetRows.MAPPER,
               session.get("training_schedule_id"));
       String reason = version < 2 ? "Legacy simulation replaced by scheduled training" : null;
@@ -392,13 +391,18 @@ public class RaceSimulationService {
             id);
         session.put("status", "Completed");
         session.put("stopped_at", stopped);
-        db.update(
-            "UPDATE training_schedules SET status='Completed' WHERE id=? AND status='InProgress'",
-            session.get("training_schedule_id"));
-        db.update(
-            "UPDATE calendar_events SET status='Completed' WHERE source_table='training_schedules'"
-                + " AND source_id=? AND status='InProgress'",
-            session.get("training_schedule_id"));
+        int completedSchedule =
+            db.update(
+                "UPDATE training_schedules SET status='Completed' WHERE id=? AND"
+                    + " status='InProgress'",
+                session.get("training_schedule_id"));
+        if (completedSchedule > 0
+            && !schedules.isEmpty()
+            && schedules.getFirst().get("calendar_event_id") != null) {
+          db.update(
+              "UPDATE calendar_events SET status='Completed' WHERE id=?",
+              schedules.getFirst().get("calendar_event_id"));
+        }
         if (session.get("created_by") instanceof Number actor)
           audit.record(
               actor.longValue(), "server-reconciliation", "FINALIZE_TRAINING_SIMULATION:" + id);

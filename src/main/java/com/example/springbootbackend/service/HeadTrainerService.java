@@ -834,7 +834,8 @@ public class HeadTrainerService {
       CompletableFuture<EventsBatch> eventsFuture = CompletableFuture.supplyAsync(() -> {
         var rows = db.query(
             "SELECT ce.id AS"
-                + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ce.status,ts.id"
+                + " event_id,ce.event_type,ce.title,ce.event_date,ce.start_time,ce.end_time,ts.status"
+                + " AS status,ce.status AS event_status,ts.id"
                 + " AS training_schedule_id,ts.session_type,ts.track_surface,ts.notes,ts.trainer_review,h.id"
                 + " AS horse_id,h.horse_name,h.image_url,sb.box_code,sb.section,ts.training_plan_id,ts.assigned_groom_id,ts.snapshot_stage_name"
                 + " AS plan_stage_name,COALESCE(p.start_date,ts.snapshot_start_date) AS"
