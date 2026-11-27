@@ -7,6 +7,8 @@ import com.example.springbootbackend.controller.HorseOwnershipConsentController;
 import com.example.springbootbackend.controller.HorseRegistrationReviewController;
 import com.example.springbootbackend.controller.StableIncidentImageController;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
@@ -26,6 +28,16 @@ public class HorseExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<?> business(ResponseStatusException e) {
         return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", e.getReason() == null ? "Yêu cầu không hợp lệ" : e.getReason()));
+    }
+
+    @ExceptionHandler(VetException.class)
+    ResponseEntity<?> vetBusiness(VetException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("message", e.getMessage() == null ? "Yêu cầu không hợp lệ" : e.getMessage());
+        if (e.body().get("error") instanceof Map<?, ?> err && err.get("details") instanceof List<?> details && !details.isEmpty()) {
+            body.put("errors", details);
+        }
+        return ResponseEntity.status(e.status()).body(body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

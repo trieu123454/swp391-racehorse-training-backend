@@ -148,6 +148,29 @@ class HorseRegistrationControllerTests {
     }
 
     @Test
+    void reportsBothMicrochipAndPassportConflictsTogether() throws Exception {
+        mvc.perform(submit(ownerEmail, "HORSE_OWNER",
+                        submission("REGISTER", "First Horse", "CHIP-BOTH-1", "PASS-BOTH-1"), REGISTER_DOCS))
+                .andExpect(status().isCreated());
+        approveRegister(latestRequestId(ownerEmail));
+
+        mvc.perform(submit(otherOwnerEmail, "HORSE_OWNER",
+                        submission("REGISTER", "Second Horse", "chip-both-1", "pass-both-1"), REGISTER_DOCS))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Số microchip và số hộ chiếu đã được dùng cho một hồ sơ khác"))
+                .andExpect(jsonPath("$.errors.length()").value(2))
+                .andExpect(jsonPath("$.errors[*].field")
+                        .value(org.hamcrest.Matchers.containsInAnyOrder("microchipNumber", "passportNumber")));
+
+        mvc.perform(submit(otherOwnerEmail, "HORSE_OWNER",
+                        submission("REGISTER", "Third Horse", "CHIP-UNIQUE-2", "PASS-BOTH-1"), REGISTER_DOCS))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Số hộ chiếu đã được dùng cho một hồ sơ khác"))
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("passportNumber"));
+    }
+
+    @Test
     void managerApprovalCreatesProfileAndPersistsIdentityPedigreeAndDocuments() throws Exception {
         mvc.perform(submit(ownerEmail, "HORSE_OWNER",
                         submission("REGISTER", "River Song", "CHIP-301", "PASS-301"), List.of("OWNERSHIP_PROOF", "HEALTH_DOCUMENT")))

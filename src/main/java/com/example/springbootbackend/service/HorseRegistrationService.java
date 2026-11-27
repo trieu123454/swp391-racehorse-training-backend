@@ -9,6 +9,7 @@ import com.example.springbootbackend.entity.HorseRegistrationDocument;
 import com.example.springbootbackend.entity.HorseRegistrationRequest;
 import com.example.springbootbackend.entity.Notification;
 import com.example.springbootbackend.entity.UserStatus;
+import com.example.springbootbackend.exception.VetException;
 import com.example.springbootbackend.repository.AppUserRepository;
 import com.example.springbootbackend.repository.AuditLogRepository;
 import com.example.springbootbackend.repository.HorseRegistrationDocumentRepository;
@@ -757,22 +758,34 @@ public class HorseRegistrationService {
       String chip, String passport, String requestId, String horseId) {
     chip = normalizeIdentifier(chip);
     passport = normalizeIdentifier(passport);
+    List<Map<String, String>> fieldErrors = new ArrayList<>();
     if (chip != null
         && ((horseId == null
                 ? horseRepository.existsByMicrochipNumberIgnoreCaseAndDeletedAtIsNull(chip)
                 : horseRepository.existsByMicrochipNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(
                     chip, horseId))
             || requestRepository.existsOtherActiveMicrochip(
-                "REGISTER", ACTIVE_REQUEST_STATUSES, chip, requestId)))
-      throw new ResponseStatusException(CONFLICT, "Số microchip đã được dùng cho một hồ sơ khác");
+                "REGISTER", ACTIVE_REQUEST_STATUSES, chip, requestId))) {
+      fieldErrors.add(
+          Map.of("field", "microchipNumber", "message", "Số microchip đã được dùng cho một hồ sơ khác"));
+    }
     if (passport != null
         && ((horseId == null
                 ? horseRepository.existsByPassportNumberIgnoreCaseAndDeletedAtIsNull(passport)
                 : horseRepository.existsByPassportNumberIgnoreCaseAndIdNotAndDeletedAtIsNull(
                     passport, horseId))
             || requestRepository.existsOtherActivePassport(
-                "REGISTER", ACTIVE_REQUEST_STATUSES, passport, requestId)))
-      throw new ResponseStatusException(CONFLICT, "Số hộ chiếu đã được dùng cho một hồ sơ khác");
+                "REGISTER", ACTIVE_REQUEST_STATUSES, passport, requestId))) {
+      fieldErrors.add(
+          Map.of("field", "passportNumber", "message", "Số hộ chiếu đã được dùng cho một hồ sơ khác"));
+    }
+    if (!fieldErrors.isEmpty()) {
+      String summary =
+          fieldErrors.size() > 1
+              ? "Số microchip và số hộ chiếu đã được dùng cho một hồ sơ khác"
+              : fieldErrors.getFirst().get("message");
+      throw new VetException(409, "IDENTIFIER_CONFLICT", summary, fieldErrors);
+    }
   }
 
   private void validateNoDuplicateActiveRequest(
