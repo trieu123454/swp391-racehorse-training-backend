@@ -32,6 +32,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class HorseService {
   private static final long LIST_CACHE_TTL_MS = 20_000L;
   private static final long STABLES_CACHE_TTL_MS = 60_000L;
+  private static final int MAX_ACTIVE_SUPPLEMENT_DOCS = 20;
+  private static final Set<String> SUPPLEMENT_DOCUMENT_TYPES =
+      Set.of("HORSE_CERTIFICATE", "HEALTH_DOCUMENT", "OTHER");
 
   private static final class CachedValue<T> {
     private final T value;
@@ -359,14 +362,236 @@ public class HorseService {
     List<Object> args = new ArrayList<>();
     args.add(horseId.toString());
     if (actor.role().equals("HORSE_OWNER")) args.add(actor.id());
-    return db.queryForList(
-        "SELECT d.id,d.original_filename AS"
-            + " name,d.content_type,d.file_size,d.document_type,d.revision_no,d.uploaded_at,d.object_path"
-            + " FROM horse_registration_documents d JOIN horse_registration_requests r ON"
-            + " r.id=d.request_id WHERE r.approved_horse_id=? AND r.status='APPROVED'"
-            + ownerFilter
-            + " ORDER BY d.uploaded_at DESC",
-        args.toArray());
+    var registrationRows =
+        db.queryForList(
+            "SELECT d.id,d.original_filename AS"
+                + " name,d.content_type,d.file_size,d.document_type,d.revision_no,d.uploaded_at,d.object_path"
+                + " FROM horse_registration_documents d JOIN horse_registration_requests r ON"
+                + " r.id=d.request_id WHERE r.approved_horse_id=? AND r.status='APPROVED'"
+                + ownerFilter
+                + " ORDER BY d.uploaded_at DESC",
+            args.toArray());
+
+    String revokedFilter = actor.role().equals("HORSE_OWNER") ? " AND d.revoked_at IS NULL" : "";
+    var supplementRows =
+        db.queryForList(
+            "SELECT d.id,d.original_filename AS"
+                + " name,d.content_type,d.file_size,d.document_type,1 AS"
+                + " revision_no,d.uploaded_at,d.object_path,d.note,d.revoked_at,d.revoke_reason,"
+                + "up.full_name AS uploaded_by_name,rev.full_name AS revoked_by_name"
+                + " FROM horse_supplement_documents d LEFT JOIN users up ON"
+                + " up.user_id=d.uploaded_by LEFT JOIN users rev ON rev.user_id=d.revoked_by"
+                + " WHERE d.horse_id=?"
+                + revokedFilter
+                + " ORDER BY d.uploaded_at DESC",
+            horseId.toString());
+
+    List<Map<String, Object>> combined = new ArrayList<>(registrationRows.size() + supplementRows.size());
+    for (var row : registrationRows) {
+      Map<String, Object> item = new LinkedHashMap<>(row);
+      item.put("source", "REGISTRATION");
+      item.put("note", null);
+      item.put("uploaded_by_name", null);
+      item.put("revoked_at", null);
+      item.put("revoked_by_name", null);
+      item.put("revoke_reason", null);
+      item.put("can_revoke", false);
+      combined.add(item);
+    }
+    for (var row : supplementRows) {
+      Map<String, Object> item = new LinkedHashMap<>(row);
+      item.put("source", "MANAGER_SUPPLEMENT");
+      item.put("can_revoke", actor.role().equals("CLUB_MANAGER") && row.get("revoked_at") == null);
+      combined.add(item);
+    }
+    combined.sort(
+        (left, right) -> {
+          String a = Objects.toString(left.get("uploaded_at"), "");
+          String b = Objects.toString(right.get("uploaded_at"), "");
+          return b.compareTo(a);
+        });
+    return combined;
+  }
+
+  public String validateSupplementDocumentInput(
+      Actor actor, UUID horseId, String documentType, String note) {
+    if (!actor.role().equals("CLUB_MANAGER")) {
+      throw new ResponseStatusException(FORBIDDEN, "Chỉ Quản lý CLB mới có quyền bổ sung giấy tờ");
+    }
+    horseRepository
+        .findByIdAndDeletedAtIsNull(horseId.toString())
+        .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
+    String normalized =
+        documentType == null || documentType.isBlank()
+            ? "OTHER"
+            : documentType.trim().toUpperCase(Locale.ROOT);
+    if ("OWNERSHIP_PROOF".equals(normalized)) {
+      throw new ResponseStatusException(
+          BAD_REQUEST, "Không thể bổ sung loại chứng minh quyền sở hữu sau khi hồ sơ đã duyệt");
+    }
+    if (!SUPPLEMENT_DOCUMENT_TYPES.contains(normalized)) {
+      throw new ResponseStatusException(BAD_REQUEST, "Loại giấy tờ bổ sung không hợp lệ");
+    }
+    if (note != null && note.trim().length() > 500) {
+      throw new ResponseStatusException(BAD_REQUEST, "Ghi chú giấy tờ không được vượt quá 500 ký tự");
+    }
+    Long activeCount =
+        db.queryForObject(
+            "SELECT count(*) FROM horse_supplement_documents WHERE horse_id=? AND revoked_at IS NULL",
+            Long.class,
+            horseId.toString());
+    if (activeCount != null && activeCount >= MAX_ACTIVE_SUPPLEMENT_DOCS) {
+      throw new ResponseStatusException(
+          BAD_REQUEST, "Hồ sơ đã đạt tối đa 20 giấy tờ bổ sung còn hiệu lực");
+    }
+    return normalized;
+  }
+
+  @Transactional
+  public Map<String, Object> saveSupplementDocument(
+      Actor actor,
+      UUID horseId,
+      String objectPath,
+      String originalFilename,
+      String contentType,
+      long fileSize,
+      String documentType,
+      String note) {
+    String normalizedType = validateSupplementDocumentInput(actor, horseId, documentType, note);
+    Horse horse =
+        horseRepository
+            .findActiveByIdForUpdate(horseId.toString())
+            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
+    Long activeCount =
+        db.queryForObject(
+            "SELECT count(*) FROM horse_supplement_documents WHERE horse_id=? AND revoked_at IS NULL",
+            Long.class,
+            horseId.toString());
+    if (activeCount != null && activeCount >= MAX_ACTIVE_SUPPLEMENT_DOCS) {
+      throw new ResponseStatusException(
+          BAD_REQUEST, "Hồ sơ đã đạt tối đa 20 giấy tờ bổ sung còn hiệu lực");
+    }
+    String safeFilename =
+        originalFilename == null || originalFilename.isBlank()
+            ? "giay-to"
+            : originalFilename.trim();
+    if (safeFilename.length() > 255) safeFilename = safeFilename.substring(0, 255);
+    String safeContentType =
+        contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType.trim();
+    if (safeContentType.length() > 100) safeContentType = safeContentType.substring(0, 100);
+    String safeNote = note == null || note.isBlank() ? null : note.trim();
+    String docId = UUID.randomUUID().toString();
+    LocalDateTime now = time.utcNow();
+    db.update(
+        "INSERT INTO"
+            + " horse_supplement_documents(id,horse_id,object_path,original_filename,content_type,file_size,document_type,note,uploaded_by,uploaded_at)"
+            + " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        docId,
+        horseId.toString(),
+        objectPath,
+        safeFilename,
+        safeContentType,
+        fileSize,
+        normalizedType,
+        safeNote,
+        actor.id(),
+        now);
+    audit(actor.id(), "ADD_HORSE_DOCUMENT:" + horseId + ":" + docId);
+    if (horse.getOwnerId() != null) {
+      Notification notification = new Notification();
+      notification.setId(UUID.randomUUID().toString());
+      notification.setUserId(horse.getOwnerId());
+      notification.setRelatedTable("horses");
+      notification.setRelatedId(horseId.toString());
+      notification.setMessage(
+          "Quản lý CLB vừa bổ sung giấy tờ ("
+              + supplementDocumentTypeLabel(normalizedType)
+              + ") vào hồ sơ ngựa "
+              + horse.getHorseName()
+              + ".");
+      notification.setRead(false);
+      notification.setCreatedAt(now);
+      notificationRepository.saveAndFlush(notification);
+    }
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("id", docId);
+    result.put("name", safeFilename);
+    result.put("content_type", safeContentType);
+    result.put("file_size", fileSize);
+    result.put("document_type", normalizedType);
+    result.put("revision_no", 1);
+    result.put("uploaded_at", now);
+    result.put("object_path", objectPath);
+    result.put("note", safeNote);
+    result.put("uploaded_by_name", findUserName(actor.id()));
+    result.put("revoked_at", null);
+    result.put("revoked_by_name", null);
+    result.put("revoke_reason", null);
+    result.put("source", "MANAGER_SUPPLEMENT");
+    result.put("can_revoke", true);
+    return result;
+  }
+
+  @Transactional
+  public Map<String, Object> revokeSupplementDocument(
+      Actor actor, UUID horseId, UUID docId, String reason) {
+    if (!actor.role().equals("CLUB_MANAGER")) {
+      throw new ResponseStatusException(FORBIDDEN, "Chỉ Quản lý CLB mới có quyền thu hồi giấy tờ bổ sung");
+    }
+    horseRepository
+        .findActiveByIdForUpdate(horseId.toString())
+        .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Không tìm thấy ngựa"));
+    String trimmedReason = reason == null ? "" : reason.trim();
+    if (trimmedReason.length() < 3 || trimmedReason.length() > 500) {
+      throw new ResponseStatusException(
+          BAD_REQUEST, "Vui lòng nhập lý do thu hồi từ 3 đến 500 ký tự");
+    }
+    var rows =
+        db.queryForList(
+            "SELECT id,revoked_at FROM horse_supplement_documents WHERE id=? AND horse_id=?",
+            docId.toString(),
+            horseId.toString());
+    if (rows.isEmpty()) {
+      Long originalCount =
+          db.queryForObject(
+              "SELECT count(*) FROM horse_registration_documents d JOIN horse_registration_requests"
+                  + " r ON r.id=d.request_id WHERE d.id=? AND r.approved_horse_id=? AND"
+                  + " r.status='APPROVED'",
+              Long.class,
+              docId.toString(),
+              horseId.toString());
+      if (originalCount != null && originalCount > 0) {
+        throw new ResponseStatusException(
+            CONFLICT, "Không thể thu hồi giấy tờ pháp lý gốc từ hồ sơ đăng ký");
+      }
+      throw new ResponseStatusException(NOT_FOUND, "Không tìm thấy giấy tờ bổ sung");
+    }
+    if (rows.getFirst().get("revoked_at") != null) {
+      throw new ResponseStatusException(CONFLICT, "Giấy tờ này đã được thu hồi trước đó");
+    }
+    LocalDateTime now = time.utcNow();
+    db.update(
+        "UPDATE horse_supplement_documents SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE"
+            + " id=?",
+        now,
+        actor.id(),
+        trimmedReason,
+        docId.toString());
+    audit(actor.id(), "REVOKE_HORSE_DOCUMENT:" + horseId + ":" + docId);
+    Map<String, Object> response = new LinkedHashMap<>();
+    response.put("id", docId.toString());
+    response.put("status", "REVOKED");
+    response.put("revoked_at", now);
+    response.put("revoke_reason", trimmedReason);
+    return response;
+  }
+
+  private static String supplementDocumentTypeLabel(String documentType) {
+    return switch (documentType) {
+      case "HORSE_CERTIFICATE" -> "Giấy chứng nhận / Hộ chiếu";
+      case "HEALTH_DOCUMENT" -> "Hồ sơ sức khỏe / Kiểm dịch";
+      default -> "Giấy tờ khác";
+    };
   }
 
   private boolean groomHasAssignment(long groomId, String horseId) {

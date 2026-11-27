@@ -318,4 +318,108 @@ class HorseControllerTests {
                 .with(user("CLUB_MANAGER@test.com")))
         .andExpect(status().isPayloadTooLarge());
   }
+
+  @Test
+  void managerCanSupplementAndRevokeOwnDocumentButCannotRevokeOriginalRegistrationDocument()
+      throws Exception {
+    String id = createHorse();
+    var validDoc =
+        new MockMultipartFile(
+            "file", "passport-renewed.pdf", "application/pdf", "%PDF-1.7 renewed".getBytes());
+
+    mvc.perform(
+            multipart("/api/horses/" + id + "/documents")
+                .file(validDoc)
+                .param("documentType", "HORSE_CERTIFICATE")
+                .with(user("HORSE_OWNER@test.com")))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            multipart("/api/horses/" + id + "/documents")
+                .file(validDoc)
+                .param("documentType", "HORSE_CERTIFICATE")
+                .with(user("HEAD_TRAINER@test.com")))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            multipart("/api/horses/" + id + "/documents")
+                .file(validDoc)
+                .param("documentType", "OWNERSHIP_PROOF")
+                .with(user("CLUB_MANAGER@test.com")))
+        .andExpect(status().isBadRequest());
+
+    var created =
+        mvc.perform(
+                multipart("/api/horses/" + id + "/documents")
+                    .file(validDoc)
+                    .param("documentType", "HORSE_CERTIFICATE")
+                    .param("note", "Gia hạn hộ chiếu ngựa năm 2026")
+                    .with(user("CLUB_MANAGER@test.com")))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.source").value("MANAGER_SUPPLEMENT"))
+            .andExpect(jsonPath("$.document_type").value("HORSE_CERTIFICATE"))
+            .andExpect(jsonPath("$.note").value("Gia hạn hộ chiếu ngựa năm 2026"))
+            .andExpect(jsonPath("$.can_revoke").value(true))
+            .andReturn();
+    String supplementDocId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+    assertThat(
+            db.queryForObject(
+                "SELECT count(*) FROM notifications WHERE related_table='horses' AND related_id=?",
+                Long.class,
+                id))
+        .isEqualTo(1L);
+
+    mvc.perform(get("/api/horses/" + id).with(user("HORSE_OWNER@test.com")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.registration_documents.length()").value(3));
+
+    String originalDocId =
+        db.queryForObject(
+            "SELECT d.id FROM horse_registration_documents d JOIN horse_registration_requests r ON"
+                + " r.id=d.request_id WHERE r.approved_horse_id=? LIMIT 1",
+            String.class,
+            id);
+
+    mvc.perform(
+            patch("/api/horses/" + id + "/documents/" + originalDocId + "/revoke")
+                .with(user("CLUB_MANAGER@test.com"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"Muốn xóa bản gốc\"}"))
+        .andExpect(status().isConflict());
+
+    mvc.perform(
+            patch("/api/horses/" + id + "/documents/" + supplementDocId + "/revoke")
+                .with(user("CLUB_MANAGER@test.com"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"ab\"}"))
+        .andExpect(status().isBadRequest());
+
+    mvc.perform(
+            patch("/api/horses/" + id + "/documents/" + supplementDocId + "/revoke")
+                .with(user("CLUB_MANAGER@test.com"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"Tải nhầm bản nháp chưa đóng dấu\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("REVOKED"));
+
+    mvc.perform(get("/api/horses/" + id).with(user("HORSE_OWNER@test.com")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.registration_documents.length()").value(2));
+
+    mvc.perform(
+            get("/api/horses/" + id + "/documents/" + supplementDocId + "/url")
+                .with(user("HORSE_OWNER@test.com")))
+        .andExpect(status().isNotFound());
+
+    mvc.perform(get("/api/horses/" + id).with(user("CLUB_MANAGER@test.com")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.registration_documents.length()").value(3))
+        .andExpect(
+            jsonPath(
+                    "$.registration_documents[?(@.id=='"
+                        + supplementDocId
+                        + "')].revoke_reason")
+                .value("Tải nhầm bản nháp chưa đóng dấu"));
+  }
 }

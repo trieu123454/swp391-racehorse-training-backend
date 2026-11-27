@@ -97,36 +97,32 @@ public class HorseController {
     List<Map<String, Object>> rawDocs =
         horses.approvedRegistrationDocumentsForVerifiedHorse(actor, id);
     List<Map<String, Object>> documents =
-        rawDocs.parallelStream()
-            .map(
-                document -> {
-                  Map<String, Object> item = new LinkedHashMap<>(document);
-                  String path = Objects.toString(item.remove("object_path"), null);
-                  String url = null;
-                  String downloadUrl = null;
-                  Object expiresIn = null;
-                  if (path != null && !path.isBlank()) {
-                    try {
-                      Map<String, Object> signed = storage.signedUrl(path);
-                      Map<String, Object> download =
-                          storage.signedUrl(
-                              path, Objects.toString(item.get("name"), "giay-to.pdf"));
-                      url = signed.get("url") instanceof String s && !s.isBlank() ? s : null;
-                      downloadUrl =
-                          download.get("url") instanceof String s && !s.isBlank() ? s : null;
-                      expiresIn = signed.get("expiresIn");
-                    } catch (RuntimeException ignored) {
-                      // Keep non-blocking if storage signing fails for a legacy or broken
-                      // document path
-                    }
-                  }
-                  item.put("url", url);
-                  item.put("download_url", downloadUrl);
-                  item.put("expires_in", expiresIn);
-                  return item;
-                })
-            .toList();
+        rawDocs.parallelStream().map(this::signDocumentItem).toList();
     horse.put("registration_documents", documents);
+  }
+
+  private Map<String, Object> signDocumentItem(Map<String, Object> document) {
+    Map<String, Object> item = new LinkedHashMap<>(document);
+    String path = Objects.toString(item.remove("object_path"), null);
+    String url = null;
+    String downloadUrl = null;
+    Object expiresIn = null;
+    if (path != null && !path.isBlank()) {
+      try {
+        Map<String, Object> signed = storage.signedUrl(path);
+        Map<String, Object> download =
+            storage.signedUrl(path, Objects.toString(item.get("name"), "giay-to.pdf"));
+        url = signed.get("url") instanceof String s && !s.isBlank() ? s : null;
+        downloadUrl = download.get("url") instanceof String s && !s.isBlank() ? s : null;
+        expiresIn = signed.get("expiresIn");
+      } catch (RuntimeException ignored) {
+        // Keep non-blocking if storage signing fails for a legacy or broken document path
+      }
+    }
+    item.put("url", url);
+    item.put("download_url", downloadUrl);
+    item.put("expires_in", expiresIn);
+    return item;
   }
 
   @GetMapping("/{id}/ownership-history")
@@ -218,5 +214,44 @@ public class HorseController {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tệp giấy tờ");
     }
     return Map.of("url", url, "expiresIn", signed.getOrDefault("expiresIn", 300));
+  }
+
+  @PostMapping(value = "/{id}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @ResponseStatus(HttpStatus.CREATED)
+  public Map<String, Object> addSupplementDocument(
+      Principal p,
+      @PathVariable("id") UUID id,
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(name = "documentType", defaultValue = "OTHER") String documentType,
+      @RequestParam(name = "note", required = false) String note) {
+    HorseService.Actor actor = horses.actor(p.getName(), true);
+    String normalizedType = horses.validateSupplementDocumentInput(actor, id, documentType, note);
+    String objectPath = storage.uploadRegistrationDocument(file);
+    try {
+      Map<String, Object> saved =
+          horses.saveSupplementDocument(
+              actor,
+              id,
+              objectPath,
+              file.getOriginalFilename(),
+              file.getContentType(),
+              file.getSize(),
+              normalizedType,
+              note);
+      return signDocumentItem(saved);
+    } catch (RuntimeException ex) {
+      storage.deleteQuietly(objectPath);
+      throw ex;
+    }
+  }
+
+  @PatchMapping("/{id}/documents/{docId}/revoke")
+  public Map<String, Object> revokeSupplementDocument(
+      Principal p,
+      @PathVariable("id") UUID id,
+      @PathVariable("docId") UUID docId,
+      @RequestBody(required = false) Map<String, Object> body) {
+    String reason = body == null ? null : Objects.toString(body.get("reason"), null);
+    return horses.revokeSupplementDocument(horses.actor(p.getName(), true), id, docId, reason);
   }
 }
